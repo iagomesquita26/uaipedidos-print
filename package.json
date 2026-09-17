@@ -34,9 +34,7 @@
       "createStartMenuShortcut": true
     },
     "mac": {
-      "target": [
-        { "target": "dmg", "arch": "universal" }
-      ],
+      "target": ["dmg"],
       "category": "public.app-category.business",
       "identity": null
     },
