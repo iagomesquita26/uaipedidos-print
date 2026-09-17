@@ -1,0 +1,44 @@
+{
+  "name": "uaipedidos-print",
+  "productName": "UaiPedidos Print",
+  "version": "1.0.0",
+  "description": "Impressao automatica de pedidos do UaiPedidos, direto na impressora termica, sem navegador aberto.",
+  "author": "UaiPedidos",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^31.7.6",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "br.com.uaipedidos.print",
+    "productName": "UaiPedidos Print",
+    "artifactName": "UaiPedidos-Print-${version}-${os}.${ext}",
+    "files": ["src/**/*", "ui/**/*", "assets/**/*", "package.json"],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.business",
+      "identity": null
+    },
+    "dmg": {
+      "title": "UaiPedidos Print"
+    }
+  }
+}

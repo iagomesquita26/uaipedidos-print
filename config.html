@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UaiPedidos Print</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <img src="../assets/icon.png" alt="">
+  <h1>UaiPedidos Print</h1>
+  <span id="statusPill" class="pill off">Desconectado</span>
+</header>
+
+<main>
+  <!-- Conta da loja -->
+  <section class="card">
+    <h2>Conta da loja</h2>
+    <p class="sub">Use o mesmo e-mail e senha com que voce entra no painel do UaiPedidos.</p>
+
+    <div id="blocoDesconectado">
+      <label for="email">E-mail da loja</label>
+      <input type="email" id="email" placeholder="voce@sualoja.com.br" autocomplete="username">
+      <label for="senha">Senha</label>
+      <input type="password" id="senha" placeholder="sua senha" autocomplete="current-password">
+      <details class="avancado">
+        <summary>Opções avançadas</summary>
+        <label for="base">Endereço do sistema</label>
+        <input type="text" id="base" value="https://uaipedidos.com.br">
+      </details>
+      <div class="btns">
+        <button class="b-primary" id="btnConectar">Conectar</button>
+      </div>
+      <div class="aviso" id="avisoConta"></div>
+    </div>
+
+    <div id="blocoConectado" style="display:none">
+      <p>Conectado como <span class="loja-nome" id="lojaNome">loja</span>.</p>
+      <div class="btns">
+        <button class="b-soft" id="btnSair">Desconectar</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Impressão -->
+  <section class="card">
+    <h2>Impressão</h2>
+    <p class="sub">Escolha a impressora da bobina e como os pedidos devem sair.</p>
+
+    <label for="impressora">Impressora</label>
+    <div class="row">
+      <div><select id="impressora"><option value="">Impressora padrão do sistema</option></select></div>
+      <button class="b-soft" id="btnAtualizarImp" style="flex:0 0 auto">Atualizar</button>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="vias">O que imprimir</label>
+        <select id="vias">
+          <option value="auto">Usar a configuração da loja</option>
+          <option value="cozinha">Só a via da cozinha</option>
+          <option value="motoboy">Só a via de entrega</option>
+          <option value="ambas">As duas vias</option>
+        </select>
+      </div>
+      <div>
+        <label for="copias">Cópias</label>
+        <input type="number" id="copias" min="1" max="5" value="1">
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <label for="intervalo">Verificar a cada (segundos)</label>
+        <input type="number" id="intervalo" min="5" max="120" value="12">
+      </div>
+    </div>
+
+    <div class="check"><input type="checkbox" id="som"> <span>Tocar aviso sonoro ao chegar pedido</span></div>
+    <div class="check"><input type="checkbox" id="autostart"> <span>Iniciar junto com o computador</span></div>
+
+    <div class="btns">
+      <button class="b-primary" id="btnSalvar">Salvar</button>
+      <button class="b-ghost" id="btnTeste">Imprimir teste</button>
+      <button class="b-soft" id="btnPausa">Pausar</button>
+    </div>
+    <div class="aviso" id="avisoImp"></div>
+  </section>
+
+  <!-- Atividade -->
+  <section class="card">
+    <h2>Atividade</h2>
+    <p class="sub">O que o programa está fazendo agora.</p>
+    <div id="log"></div>
+    <div class="btns">
+      <button class="b-soft" id="btnPasta">Abrir pasta de dados</button>
+    </div>
+  </section>
+</main>
+
+<script src="config.js"></script>
+</body>
+</html>
