@@ -9,6 +9,7 @@ function fmtHora(ts) {
 }
 function addLog(item) {
   const log = $('log');
+  if (!log) return;
   const linha = document.createElement('div');
   linha.className = 'l';
   linha.innerHTML = '<span class="t">' + fmtHora(item.ts) + '</span> ' +
@@ -61,7 +62,7 @@ async function carregar() {
   $('email').value = c.email || '';
   $('vias').value = c.vias || 'auto';
   $('copias').value = c.copiasCozinha || 1;
-  $('intervalo').value = c.intervalo || 12;
+  $('intervalo').value = c.intervalo || 5;
   $('som').checked = c.som !== false;
   $('autostart').checked = c.autostart !== false;
   await carregarImpressoras(c.impressora);
@@ -91,7 +92,7 @@ $('btnSalvar').addEventListener('click', async () => {
     impressora: $('impressora').value,
     vias: $('vias').value,
     copiasCozinha: Math.max(1, Math.min(5, Number($('copias').value) || 1)),
-    intervalo: Math.max(5, Math.min(120, Number($('intervalo').value) || 12)),
+    intervalo: Math.max(5, Math.min(120, Number($('intervalo').value) || 5)),
     som: $('som').checked,
     autostart: $('autostart').checked,
   });
@@ -112,6 +113,14 @@ $('btnPausa').addEventListener('click', async () => {
 
 $('btnAtualizarImp').addEventListener('click', () => carregarImpressoras());
 $('btnPasta').addEventListener('click', () => window.uai.abrirPasta());
+
+// mostra/esconde as configurações avançadas
+$('btnAvancado').addEventListener('click', () => {
+  const a = $('avancado');
+  const aberto = a.style.display !== 'none';
+  a.style.display = aberto ? 'none' : 'block';
+  $('advSeta').textContent = aberto ? '▾' : '▴';
+});
 
 // ------- eventos vindos do programa -------
 window.uai.onLog(addLog);

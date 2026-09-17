@@ -1,7 +1,7 @@
 {
   "name": "uaipedidos-print",
   "productName": "UaiPedidos Print",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Impressao automatica de pedidos do UaiPedidos, direto na impressora termica, sem navegador aberto.",
   "author": "UaiPedidos",
   "license": "UNLICENSED",
@@ -21,6 +21,7 @@
     "appId": "br.com.uaipedidos.print",
     "productName": "UaiPedidos Print",
     "artifactName": "UaiPedidos-Print-${version}-${os}.${ext}",
+    "afterPack": "build/afterPack.js",
     "files": ["src/**/*", "ui/**/*", "assets/**/*", "package.json"],
     "win": {
       "target": ["nsis"]
@@ -33,7 +34,9 @@
       "createStartMenuShortcut": true
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        { "target": "dmg", "arch": "universal" }
+      ],
       "category": "public.app-category.business",
       "identity": null
     },

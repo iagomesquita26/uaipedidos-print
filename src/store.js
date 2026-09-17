@@ -21,7 +21,7 @@ const CFG_PADRAO = {
   tokenExpira: 0,     // epoch em ms
   impressora: '',     // deviceName escolhido (vazio = padrão do sistema)
   vias: 'auto',       // 'auto' (usa a config da loja) | 'cozinha' | 'motoboy' | 'ambas'
-  intervalo: 12,      // segundos entre verificações
+  intervalo: 5,       // segundos entre verificações
   copiasCozinha: 1,   // quantas vias iguais imprimir
   som: true,          // aviso sonoro ao chegar pedido
   autostart: true,    // iniciar junto com o computador

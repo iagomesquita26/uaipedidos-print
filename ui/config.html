@@ -43,38 +43,15 @@
     </div>
   </section>
 
-  <!-- Impressão -->
+  <!-- Impressão (simples) -->
   <section class="card">
     <h2>Impressão</h2>
-    <p class="sub">Escolha a impressora da bobina e como os pedidos devem sair.</p>
+    <p class="sub">Escolha a impressora da bobina.</p>
 
     <label for="impressora">Impressora</label>
     <div class="row">
       <div><select id="impressora"><option value="">Impressora padrão do sistema</option></select></div>
       <button class="b-soft" id="btnAtualizarImp" style="flex:0 0 auto">Atualizar</button>
-    </div>
-
-    <div class="row">
-      <div>
-        <label for="vias">O que imprimir</label>
-        <select id="vias">
-          <option value="auto">Usar a configuração da loja</option>
-          <option value="cozinha">Só a via da cozinha</option>
-          <option value="motoboy">Só a via de entrega</option>
-          <option value="ambas">As duas vias</option>
-        </select>
-      </div>
-      <div>
-        <label for="copias">Cópias</label>
-        <input type="number" id="copias" min="1" max="5" value="1">
-      </div>
-    </div>
-
-    <div class="row">
-      <div>
-        <label for="intervalo">Verificar a cada (segundos)</label>
-        <input type="number" id="intervalo" min="5" max="120" value="12">
-      </div>
     </div>
 
     <div class="check"><input type="checkbox" id="som"> <span>Tocar aviso sonoro ao chegar pedido</span></div>
@@ -88,13 +65,37 @@
     <div class="aviso" id="avisoImp"></div>
   </section>
 
-  <!-- Atividade -->
+  <!-- Configurações avançadas (fechado por padrão) -->
   <section class="card">
-    <h2>Atividade</h2>
-    <p class="sub">O que o programa está fazendo agora.</p>
-    <div id="log"></div>
-    <div class="btns">
-      <button class="b-soft" id="btnPasta">Abrir pasta de dados</button>
+    <button type="button" class="adv-toggle" id="btnAvancado">
+      <span>Configurações avançadas</span>
+      <span id="advSeta">▾</span>
+    </button>
+    <div id="avancado" style="display:none;margin-top:14px">
+      <label for="vias">O que imprimir</label>
+      <select id="vias">
+        <option value="auto">Usar a configuração da loja</option>
+        <option value="cozinha">Só a via da cozinha</option>
+        <option value="motoboy">Só a via de entrega</option>
+        <option value="ambas">As duas vias</option>
+      </select>
+
+      <div class="row">
+        <div>
+          <label for="intervalo">Verificar a cada (segundos)</label>
+          <input type="number" id="intervalo" min="5" max="120" value="5">
+        </div>
+        <div>
+          <label for="copias">Cópias</label>
+          <input type="number" id="copias" min="1" max="5" value="1">
+        </div>
+      </div>
+
+      <h3 style="font-size:14px;margin:18px 0 6px">Atividade</h3>
+      <div id="log"></div>
+      <div class="btns">
+        <button class="b-soft" id="btnPasta">Abrir pasta de dados</button>
+      </div>
     </div>
   </section>
 </main>
