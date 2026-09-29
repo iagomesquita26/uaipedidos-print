@@ -109,7 +109,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
         if (!html) { onLog('aviso', 'Pedido #' + numero + ' sem vias para imprimir.'); }
         else {
           onLog('info', 'Imprimindo o pedido #' + numero + '...');
-          await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha);
+          await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
           onLog('ok', 'Pedido #' + numero + ' enviado para a impressora.');
         }
         store.marcarProcessado(id);
@@ -128,10 +128,10 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     }
   }
 
-  async function imprimirComTentativas(html, impressora, copias) {
+  async function imprimirComTentativas(html, impressora, copias, larguraMm) {
     let ultima = null;
     for (let i = 0; i < 3; i++) {
-      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias }); return; }
+      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias, larguraMm: larguraMm }); return; }
       catch (e) { ultima = e; await new Promise(r => setTimeout(r, 1500)); }
     }
     throw ultima || new Error('Não foi possível imprimir');
@@ -213,7 +213,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       const escolha = cfg.vias && cfg.vias !== 'auto' ? cfg.vias : 'ambas';
       const html = render.montarDocumento(render.PEDIDO_EXEMPLO, prefs || {}, prefs || {}, escolha);
       onLog('info', 'Imprimindo cupom de teste...');
-      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha);
+      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
       onLog('ok', 'Cupom de teste enviado. Confira se saiu certo na bobina.');
       return { ok: true };
     } catch (e) {

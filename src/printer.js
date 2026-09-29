@@ -8,10 +8,10 @@
  */
 const { BrowserWindow } = require('electron');
 
-function novaJanelaOculta() {
+function novaJanelaOculta(larguraPx) {
   return new BrowserWindow({
     show: false,
-    width: 480,
+    width: Math.max(120, Math.round(Number(larguraPx) || 480)),
     height: 800,
     webPreferences: { offscreen: false, javascript: true, images: true },
   });
@@ -37,9 +37,12 @@ async function listarImpressoras() {
 
 // Imprime um documento HTML completo. Resolve quando o sistema aceitou o trabalho.
 function imprimirHtml(html, opcoes = {}) {
-  const { deviceName = '', copies = 1 } = opcoes;
+  const { deviceName = '', copies = 1, larguraMm = 80 } = opcoes;
+  // Largura do rolo em px de tela (96 dpi), para a janela oculta montar o cupom
+  // na mesma largura em que ele sera impresso e a medida de altura bater.
+  const larguraPx = Math.round((Number(larguraMm) || 80) * 96 / 25.4);
   return new Promise((resolve, reject) => {
-    const win = novaJanelaOculta();
+    const win = novaJanelaOculta(larguraPx);
     let terminou = false;
     const encerrar = (fn, arg) => {
       if (terminou) return;
@@ -62,11 +65,30 @@ function imprimirHtml(html, opcoes = {}) {
           setTimeout(pronto, 3000);
         })`).catch(() => {});
 
+        // Mede a altura real do cupom para informar ao Windows o tamanho EXATO do
+        // papel. Sem pageSize, o Electron assume A4, e a impressora termica de
+        // 80mm recebe o trabalho mas nao imprime nada. Era esse o bug.
+        let alturaMm = 0;
+        try {
+          alturaMm = await win.webContents.executeJavaScript(
+            'Math.ceil(Math.max('
+            + '(document.body ? document.body.scrollHeight : 0),'
+            + '(document.documentElement ? document.documentElement.scrollHeight : 0)'
+            + ') * 25.4 / 96)'
+          );
+        } catch (e) {}
+        const MICRON_POR_MM = 1000;
+        const larguraFinalMm = Number(larguraMm) || 80;
+        const alturaFinalMm = Math.max(40, (Number(alturaMm) || 200) + 4); // folga de 4mm
         const cfgPrint = {
           silent: true,
           printBackground: true,
           margins: { marginType: 'none' },
           copies: Math.max(1, Number(copies) || 1),
+          pageSize: {
+            width: Math.round(larguraFinalMm * MICRON_POR_MM),
+            height: Math.round(alturaFinalMm * MICRON_POR_MM),
+          },
         };
         if (deviceName) cfgPrint.deviceName = deviceName;
 

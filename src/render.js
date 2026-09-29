@@ -75,8 +75,16 @@ function docShell(titulo, inner, cfg) {
   const compacto = av.densidade === 'compacto';
   const lh = compacto ? 1.18 : 1.35;
   const fim = Math.min(40, Math.max(0, Number(av.espaco_fim) || 0));
+  // Margens de topo e fim viram linhas em branco reais (mesmo truque do painel.php):
+  // espaco vazio no fim de bobina some, mas linha com conteudo obriga o papel a avancar.
+  const feedMm = mb + fim;
+  const alturaLinhaPx = tam * lh;
+  const linhasFim = feedMm > 0 ? Math.max(1, Math.round(feedMm * 3.7795 / alturaLinhaPx)) : 0;
+  const feedHtml = linhasFim ? '<div>' + '&nbsp;<br>'.repeat(linhasFim) + '</div>' : '';
+  const linhasTopo = mt > 0 ? Math.max(1, Math.round(mt * 3.7795 / alturaLinhaPx)) : 0;
+  const topoHtml = linhasTopo ? '<div>' + '&nbsp;<br>'.repeat(linhasTopo) + '</div>' : '';
   return '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><title>' + escHtml(titulo) + '</title><style>' +
-    '@page { size: ' + cfgL + 'mm auto; margin: ' + mt + 'mm ' + mDir + 'mm ' + mb + 'mm ' + mEsq + 'mm; }' +
+    '@page { size: ' + cfgL + 'mm auto; margin: 0mm ' + mDir + 'mm 0mm ' + mEsq + 'mm; }' +
     'html, body { background:#fff; color:#000; margin:0; padding:0; }' +
     'body { font-family:' + fam + '; font-size:' + tam + 'px; line-height:' + lh + '; }' +
     '.bobina { max-width:' + larguraConteudo + 'px; margin:0 auto; padding:8px 2px; word-break:break-word; }' +
@@ -93,8 +101,7 @@ function docShell(titulo, inner, cfg) {
     '.corte-tx { text-align:center; font-size:.72em; letter-spacing:2px; margin-bottom:12px; }' +
     (compacto ? '.sep{margin:3px 0;} .it{margin:3px 0 0;} .cat{margin:6px 0 2px;} .lin{gap:8px;} .desc{margin:0 0 1px;}' : '') +
     '@media print { .bobina { max-width:100%; padding:0; } }' +
-    '</style></head><body>' + inner +
-    (fim > 0 ? '<div style="height:' + fim + 'mm"></div>' : '') +
+    '</style></head><body>' + topoHtml + inner + feedHtml +
     '</body></html>';
 }
 
