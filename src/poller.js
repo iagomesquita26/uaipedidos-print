@@ -131,7 +131,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   async function imprimirComTentativas(html, impressora, copias, larguraMm) {
     let ultima = null;
     for (let i = 0; i < 3; i++) {
-      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias, larguraMm: larguraMm }); return; }
+      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias, larguraMm: larguraMm, onLog: onLog }); return; }
       catch (e) { ultima = e; await new Promise(r => setTimeout(r, 1500)); }
     }
     throw ultima || new Error('Não foi possível imprimir');

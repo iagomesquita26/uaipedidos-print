@@ -1,7 +1,7 @@
 {
   "name": "uaipedidos-print",
   "productName": "UaiPedidos Print",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Impressao automatica de pedidos do UaiPedidos, direto na impressora termica, sem navegador aberto.",
   "author": "UaiPedidos",
   "license": "UNLICENSED",
