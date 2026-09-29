@@ -38,6 +38,40 @@ async function listarImpressoras() {
   }
 }
 
+// Lista as impressoras com TODOS os detalhes que o sistema expoe (driver/modelo,
+// status, se e a padrao, e o mapa cru de opcoes). Serve para o diagnostico remoto.
+async function listarImpressorasDetalhado() {
+  const win = novaJanelaOculta();
+  try {
+    await win.loadURL('data:text/html;charset=utf-8,<html><body></body></html>');
+    const lista = await win.webContents.getPrintersAsync();
+    return (lista || []).map(p => {
+      const opt = p.options || {};
+      return {
+        nome: p.name,
+        descricao: p.displayName || p.description || p.name,
+        status: p.status, // codigo numerico de status do Windows
+        padrao: !!p.isDefault,
+        // no Windows o modelo/driver costuma vir em uma destas chaves
+        driver: opt['printer-make-and-model'] || opt['system_driverinfo'] || opt['driver'] || '',
+        local: opt['printer-location'] || '',
+        // sinais que afetam ou explicam falhas de impressao
+        aceitando_trabalhos: opt['printer-is-accepting-jobs'],
+        estado_motivos: opt['printer-state-reasons'] || opt['printer-state'] || '',
+        trabalhos_na_fila: opt['queued-job-count'],
+        midia_padrao: opt['media-default'] || '',
+        midias_suportadas: opt['media-supported'] || '',
+        resolucao: opt['printer-resolution'] || opt['printer-resolution-default'] || '',
+        opcoes: opt, // mapa cru completo, para nao perdermos nenhum detalhe
+      };
+    });
+  } catch (e) {
+    return [];
+  } finally {
+    try { win.destroy(); } catch (e) {}
+  }
+}
+
 // Imprime um documento HTML completo. Resolve quando o sistema aceitou o trabalho.
 function imprimirHtml(html, opcoes = {}) {
   const { deviceName = '', copies = 1, larguraMm = 80, onLog } = opcoes;
@@ -159,4 +193,4 @@ function imprimirHtml(html, opcoes = {}) {
   });
 }
 
-module.exports = { listarImpressoras, imprimirHtml };
+module.exports = { listarImpressoras, listarImpressorasDetalhado, imprimirHtml };

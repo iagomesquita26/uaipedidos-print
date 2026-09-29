@@ -29,6 +29,11 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   const naFila = new Set(); // ids já enfileirados, para não duplicar
   let ocupado = false;
 
+  // Preferencias de impressao resolvidas da loja (largura, fonte, margens).
+  function prefsImpressao() {
+    try { return render.normalizarCfg(prefs || {}); } catch (e) { return null; }
+  }
+
   function status() {
     return {
       conectado,
@@ -108,16 +113,16 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
         const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
         if (!html) { onLog('aviso', 'Pedido #' + numero + ' sem vias para imprimir.'); }
         else {
-          onLog('info', 'Imprimindo o pedido #' + numero + '...');
+          onLog('info', 'Imprimindo o pedido #' + numero + '...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
           await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-          onLog('ok', 'Pedido #' + numero + ' enviado para a impressora.');
+          onLog('ok', 'Pedido #' + numero + ' enviado para a impressora.', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
         }
         store.marcarProcessado(id);
       }
     } catch (e) {
       ultimoErro = e.message || String(e);
       if (e.status === 401) { store.limparToken(); conectado = false; }
-      onLog('erro', 'Falha no pedido #' + numero + ': ' + ultimoErro + ' (se o cupom nao saiu, reimprima pelo painel).');
+      onLog('erro', 'Falha no pedido #' + numero + ': ' + ultimoErro + ' (se o cupom nao saiu, reimprima pelo painel).', { tipo: 'impressao', nivel: 'erro', pedido: numero, dados: { erro: ultimoErro } });
       // não marca como processado: tenta de novo na próxima volta, a menos que
       // o servidor já tenha carimbado (então marcar_impresso devolverá imprimir=false).
     } finally {
@@ -212,17 +217,17 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       try { const token = store.getToken(); if (token) await pegarPrefs(cfg.base, token, true); } catch (e) {}
       const escolha = cfg.vias && cfg.vias !== 'auto' ? cfg.vias : 'ambas';
       const html = render.montarDocumento(render.PEDIDO_EXEMPLO, prefs || {}, prefs || {}, escolha);
-      onLog('info', 'Imprimindo cupom de teste...');
+      onLog('info', 'Imprimindo cupom de teste...', { tipo: 'teste', impressora: cfg.impressora });
       await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-      onLog('ok', 'Cupom de teste enviado. Confira se saiu certo na bobina.');
+      onLog('ok', 'Cupom de teste enviado. Confira se saiu certo na bobina.', { tipo: 'teste', impressora: cfg.impressora });
       return { ok: true };
     } catch (e) {
-      onLog('erro', 'Falha no teste: ' + (e.message || e));
+      onLog('erro', 'Falha no teste: ' + (e.message || e), { tipo: 'teste', nivel: 'erro', dados: { erro: e.message || String(e) } });
       return { ok: false, erro: e.message || String(e) };
     }
   }
 
-  return { iniciar, parar, reiniciar, tick, imprimirTeste, status, get conectado() { return conectado; } };
+  return { iniciar, parar, reiniciar, tick, imprimirTeste, status, prefsImpressao, get conectado() { return conectado; } };
 }
 
 module.exports = { criarPoller };

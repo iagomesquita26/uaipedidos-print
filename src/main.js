@@ -7,13 +7,15 @@
  * só some para a bandeja. Encerra de verdade pelo menu "Sair".
  */
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, shell } = require('electron');
+const os = require('os');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, shell, screen } = require('electron');
 
 let tray = null;
 let win = null;
 let poller = null;
 let store = null;
 let printer = null;
+let telemetria = null;
 const logs = [];           // histórico curto de mensagens
 const MAX_LOGS = 250;
 
@@ -24,11 +26,85 @@ const UI = path.join(__dirname, '..', 'ui');
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 app.on('second-instance', () => mostrarJanela());
 
-function registrarLog(nivel, msg) {
+function registrarLog(nivel, msg, extra) {
   const item = { nivel, msg, ts: Date.now() };
   logs.push(item);
   if (logs.length > MAX_LOGS) logs.shift();
   if (win && !win.isDestroyed()) win.webContents.send('log', item);
+  // Espelha no diario de bordo enviado ao servidor (suporte remoto).
+  try { if (telemetria) telemetria.registrar(nivel, msg, extra || {}); } catch (e) {}
+}
+
+// Estado atual resumido, enviado como "sinal de vida" a cada poucos minutos.
+function estadoAtual() {
+  const cfg = store.getConfig();
+  const s = (poller && poller.status()) || {};
+  return {
+    impressora: cfg.impressora,
+    vias: cfg.vias,
+    intervalo: cfg.intervalo,
+    copias: cfg.copiasCozinha,
+    pausado: !!cfg.pausado,
+    conectado: !!s.conectado,
+    loja: s.loja || '',
+    ultimo_erro: s.ultimoErro || '',
+    ambiente: ambienteCache, // fotografia completa do PC (Windows, impressoras, drivers)
+  };
+}
+
+// Coleta TUDO que pode afetar a impressao: versao do Windows, arquitetura, versoes
+// internas, idioma/fuso, impressora escolhida, impressora PADRAO do sistema e a
+// lista completa de impressoras instaladas com o driver de cada uma.
+let ambienteCache = null;
+let ambienteImpressao = ''; // "impressao digital" do ambiente, p/ so registrar quando mudar
+async function coletarAmbiente(motivo) {
+  let impressoras = [];
+  try { impressoras = await printer.listarImpressorasDetalhado(); } catch (e) {}
+  const padrao = (impressoras.find(p => p.padrao) || {}).nome || '';
+  const cfg = store.getConfig();
+  const escolhida = impressoras.find(p => p.nome === cfg.impressora) || null;
+  const amb = {
+    so_nome: (() => { try { return os.version(); } catch (e) { return ''; } })(),
+    so_build: process.platform + ' ' + os.release(),
+    arch: os.arch(),
+    memoria_gb: Math.round((os.totalmem() / (1024 * 1024 * 1024)) * 10) / 10,
+    versoes: {
+      app: app.getVersion(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+    },
+    locale: (() => { try { return app.getLocale(); } catch (e) { return ''; } })(),
+    fuso: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return ''; } })(),
+    cpus: (() => { try { return os.cpus().length; } catch (e) { return 0; } })(),
+    escala_tela: (() => { try { return screen.getPrimaryDisplay().scaleFactor; } catch (e) { return null; } })(),
+    autostart: !!cfg.autostart,
+    base: cfg.base || '',
+    impressora_escolhida: cfg.impressora || '',
+    impressora_escolhida_driver: escolhida ? escolhida.driver : '',
+    impressora_escolhida_existe: !!escolhida,
+    impressora_escolhida_detalhe: escolhida, // objeto completo (status, midia, resolucao, opcoes)
+    impressora_padrao: padrao,
+    qtd_impressoras: impressoras.length,
+    impressoras: impressoras,
+    // Preferencias de impressao da loja (largura do papel, fonte, margens): afetam
+    // o cupom gerado e ajudam a explicar problemas de corte/tamanho.
+    prefs_impressao: (() => { try { return poller && poller.prefsImpressao ? poller.prefsImpressao() : null; } catch (e) { return null; } })(),
+  };
+  ambienteCache = amb;
+
+  // So registra um evento no historico quando algo relevante muda (evita repetir).
+  const digital = JSON.stringify([
+    amb.so_build, amb.versoes.app, amb.impressora_escolhida, amb.impressora_padrao,
+    impressoras.map(p => p.nome + '|' + p.driver + '|' + (p.padrao ? '1' : '0')),
+  ]);
+  if (digital !== ambienteImpressao) {
+    ambienteImpressao = digital;
+    registrarLog('info', 'Ambiente do computador registrado' + (motivo ? ' (' + motivo + ')' : '') + '.', {
+      tipo: 'ambiente', dados: amb,
+    });
+  }
+  return amb;
 }
 
 function enviarStatus(st) {
@@ -125,6 +201,9 @@ function configurarIpc() {
     const c = store.setConfig(permitido);
     aplicarAutostart();
     poller.iniciar();
+    registrarLog('info', 'Configurações salvas.', { tipo: 'config', dados: permitido });
+    coletarAmbiente('config'); // impressora pode ter mudado
+    if (telemetria) telemetria.flush(true);
     return c;
   });
 
@@ -137,8 +216,10 @@ function configurarIpc() {
       store.setToken(token);
       let loja = '';
       try { const me = await api.me(store.getConfig().base, token); loja = (me && (me.nome || (me.estabelecimento && me.estabelecimento.nome))) || ''; } catch (e) {}
-      registrarLog('ok', 'Conectado' + (loja ? ' a ' + loja : '') + '.');
+      registrarLog('ok', 'Conectado' + (loja ? ' a ' + loja : '') + '.', { tipo: 'conexao' });
       poller.iniciar();
+      coletarAmbiente('conexao');
+      if (telemetria) telemetria.flush(true); // aparece no monitor logo apos conectar
       return { ok: true, loja };
     } catch (e) {
       registrarLog('erro', 'Falha ao conectar: ' + (e.message || e));
@@ -146,11 +227,13 @@ function configurarIpc() {
     }
   });
 
-  ipcMain.handle('auth:sair', () => {
+  ipcMain.handle('auth:sair', async () => {
+    // Registra e tenta enviar a desconexao ANTES de apagar o token (senao nao envia).
+    registrarLog('aviso', 'Desconectado da loja.', { tipo: 'conexao' });
+    try { if (telemetria) await telemetria.flush(true); } catch (e) {}
     store.limparToken();
     store.setConfig({ email: '' });
     store.setSenha('');
-    registrarLog('aviso', 'Desconectado da loja.');
     poller.parar();
     enviarStatus(poller.status());
     return store.getConfig();
@@ -171,6 +254,14 @@ app.whenReady().then(() => {
     onStatus: enviarStatus,
     onNovoPedido: avisarPedidoNovo,
   });
+
+  // Telemetria: envia o diario de bordo (estado + eventos) ao servidor.
+  telemetria = require('./telemetria');
+  telemetria.iniciar({ versao: app.getVersion(), getEstado: estadoAtual });
+  registrarLog('info', 'UaiPedidos Print iniciado (versao ' + app.getVersion() + ').', { tipo: 'inicio' });
+  coletarAmbiente('inicio');
+  // Reconfere o ambiente (impressoras, driver padrao, etc.) a cada 30 min.
+  setInterval(() => { coletarAmbiente('rotina'); }, 30 * 60 * 1000);
 
   configurarIpc();
 
@@ -201,4 +292,8 @@ app.whenReady().then(() => {
 
 // Não encerra ao fechar todas as janelas: vive na bandeja.
 app.on('window-all-closed', (e) => { /* mantém vivo na bandeja */ });
-app.on('before-quit', () => { app.isQuitting = true; if (poller) poller.parar(); });
+app.on('before-quit', () => {
+  app.isQuitting = true;
+  try { if (telemetria) telemetria.registrar('info', 'Programa encerrado.', { tipo: 'parada' }); } catch (e) {}
+  if (poller) poller.parar();
+});

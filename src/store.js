@@ -12,6 +12,8 @@ const { app, safeStorage } = require('electron');
 const DIR = app.getPath('userData');
 const ARQ_CFG = path.join(DIR, 'config.json');
 const ARQ_ESTADO = path.join(DIR, 'estado.json');
+const ARQ_TELE = path.join(DIR, 'telemetria.json'); // fila de eventos p/ o servidor
+const TELE_MAX = 5000; // teto da fila local (se ficar offline muito tempo)
 
 const CFG_PADRAO = {
   base: 'https://uaipedidos.com.br',
@@ -115,7 +117,36 @@ function marcarProcessado(id) {
 }
 function pastaDados() { return DIR; }
 
+// ------- identificador fixo deste computador (para o servidor separar as maquinas) -------
+function getAgenteId() {
+  if (_cfg.agente_id) return _cfg.agente_id;
+  let id = '';
+  try { const { randomUUID } = require('crypto'); id = randomUUID(); } catch (e) {}
+  if (!id) id = 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  _cfg.agente_id = id;
+  salvarJson(ARQ_CFG, _cfg);
+  return id;
+}
+
+// ------- fila de telemetria (sobrevive a reinicios e a quedas de internet) -------
+let _tele = lerJson(ARQ_TELE, { fila: [] });
+if (!Array.isArray(_tele.fila)) _tele.fila = [];
+function teleAdicionar(ev) {
+  _tele.fila.push(ev);
+  if (_tele.fila.length > TELE_MAX) _tele.fila = _tele.fila.slice(-TELE_MAX); // descarta os mais antigos
+  salvarJson(ARQ_TELE, _tele);
+}
+function teleLista(qtd) {
+  return qtd ? _tele.fila.slice(0, qtd) : _tele.fila.slice();
+}
+function teleRemover(qtd) {
+  _tele.fila = _tele.fila.slice(qtd);
+  salvarJson(ARQ_TELE, _tele);
+}
+function teleTamanho() { return _tele.fila.length; }
+
 module.exports = {
   getConfig, setConfig, setSenha, getSenha, setToken, getToken, limparToken,
   getEstado, setLastSeen, jaProcessado, marcarProcessado, pastaDados,
+  getAgenteId, teleAdicionar, teleLista, teleRemover, teleTamanho,
 };

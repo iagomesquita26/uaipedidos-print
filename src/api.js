@@ -73,4 +73,10 @@ function marcarImpresso(base, token, id) {
   return req(base, '/api/estab/pedidos', { method: 'POST', token, body: { acao: 'marcar_impresso', id } });
 }
 
-module.exports = { ApiError, login, me, ping, listaAbertos, detalhe, marcarImpresso, baseLimpa };
+// POST /api/estab/print_log {agente_id, versao, so, maquina, estado, eventos:[...]}
+// Envia o diario de bordo (estado atual + lote de eventos) para o servidor.
+function enviarLog(base, token, payload) {
+  return req(base, '/api/estab/print_log', { method: 'POST', token, body: payload });
+}
+
+module.exports = { ApiError, login, me, ping, listaAbertos, detalhe, marcarImpresso, enviarLog, baseLimpa };
