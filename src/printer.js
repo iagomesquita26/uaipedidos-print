@@ -116,6 +116,19 @@ function imprimirHtml(html, opcoes = {}) {
         let listaImp = [];
         try { listaImp = await win.webContents.getPrintersAsync(); } catch (e) { listaImp = []; }
         const nomes = (listaImp || []).map(p => p.name);
+
+        // Impressoras "virtuais": nao sao bobina. Elas ABREM uma janela de salvar
+        // arquivo (PDF/XPS) mesmo no modo silencioso, e essa janela, presa a janela
+        // invisivel do cupom, trava o foco do PC (o Alt+Tab emperrado no teste).
+        // Nunca imprimimos nelas; pedimos para a loja escolher a termica de verdade.
+        const ehVirtual = (nome) => {
+          const n = String(nome || '').toLowerCase();
+          return n.includes('print to pdf') || n.includes('microsoft xps')
+            || n.includes('xps document') || n.includes('onenote')
+            || n.includes('fax') || n.includes('pdf24') || n.includes('cutepdf')
+            || n.includes('adobe pdf') || n.includes('save as pdf');
+        };
+
         if (deviceName && listaImp.length) {
           if (!nomes.includes(deviceName)) {
             const alvo = String(deviceName).trim().toLowerCase();
@@ -130,9 +143,28 @@ function imprimirHtml(html, opcoes = {}) {
             }
           }
         } else if (!deviceName) {
+          // Sem impressora escolhida: NAO caimos na padrao do Windows calados. Em PC
+          // sem impressora a padrao e a "Microsoft Print to PDF", que abre a janela de
+          // salvar e prende o Alt+Tab. So usamos a padrao se ela for uma termica real.
           const padrao = (listaImp || []).find(p => p.isDefault);
-          log('info', 'Nenhuma impressora escolhida, usando a padrao do Windows'
-            + (padrao ? ' ("' + padrao.name + '")' : '') + '.');
+          if (padrao && !ehVirtual(padrao.name)) {
+            deviceUsado = padrao.name;
+            log('info', 'Nenhuma impressora escolhida, usando a padrao do Windows ("' + padrao.name + '").');
+          } else {
+            throw new Error('Nenhuma impressora foi escolhida nas configuracoes'
+              + (padrao ? ' e a padrao do Windows ("' + padrao.name + '") so gera arquivo, nao imprime em bobina' : '')
+              + '. Abra as configuracoes e escolha a sua impressora termica. '
+              + 'Instaladas: ' + (nomes.join(', ') || 'nenhuma') + '.');
+          }
+        }
+
+        // Trava final: se por qualquer caminho o alvo for uma impressora virtual
+        // (PDF/XPS/OneNote/Fax), paramos com aviso claro em vez de abrir a janela de
+        // salvar arquivo (a causa do Alt+Tab travado no teste sem impressora).
+        if (deviceUsado && ehVirtual(deviceUsado)) {
+          throw new Error('A impressora "' + deviceUsado + '" nao e de bobina: ela gera '
+            + 'um arquivo (PDF/XPS) e abre uma janela de salvar. '
+            + 'Escolha a sua impressora termica nas configuracoes.');
         }
 
         // Mede a altura real do cupom para informar ao Windows o tamanho EXATO do
