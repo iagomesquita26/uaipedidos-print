@@ -9,6 +9,10 @@
  * quando o servidor confirma o recebimento. Se o PC estiver sem internet, nada
  * se perde: envia quando a conexao voltar. Tambem manda um "sinal de vida" a
  * cada poucos minutos, mesmo sem eventos, para sabermos que a loja esta online.
+ *
+ * A resposta do servidor traz o bloco "controle" (bloqueado, pausar,
+ * versao_recomendada): guardamos no store e avisamos o main.js, que reflete no
+ * tray/janela e, quando for o caso, avisa que ha versao nova.
  */
 const os = require('os');
 const api = require('./api');
@@ -22,6 +26,7 @@ let timer = null;
 let enviando = false;
 let ultimoHeartbeat = 0;
 let getEstado = () => ({});
+let onControle = () => {};
 let versao = '';
 const SO = process.platform + ' ' + os.release();
 const MAQUINA = (() => { try { return os.hostname(); } catch (e) { return ''; } })();
@@ -29,6 +34,7 @@ const MAQUINA = (() => { try { return os.hostname(); } catch (e) { return ''; } 
 function iniciar(opcoes = {}) {
   versao = opcoes.versao || '';
   if (typeof opcoes.getEstado === 'function') getEstado = opcoes.getEstado;
+  if (typeof opcoes.onControle === 'function') onControle = opcoes.onControle;
   parar();
   timer = setInterval(flush, FLUSH_MS);
 }
@@ -71,10 +77,15 @@ async function flush(forcar) {
       estado,
       eventos: lote,
     };
-    await api.enviarLog(cfg.base, token, payload);
+    const resp = await api.enviarLog(cfg.base, token, payload);
     // deu certo: tira da fila o que foi enviado e registra o heartbeat
     if (lote.length) store.teleRemover(lote.length);
     ultimoHeartbeat = Date.now();
+    // Controle remoto: guarda e avisa o main.js (tray/janela + aviso de versao).
+    if (resp && resp.controle) {
+      store.setControle(resp.controle);
+      try { onControle(store.getControle()); } catch (e) {}
+    }
     // se ainda sobrou fila grande, tenta esvaziar em seguida
     if (store.teleTamanho() > 0) setTimeout(() => flush(true), 1000);
   } catch (e) {

@@ -8,6 +8,10 @@
  *   - trava anti duplicidade no servidor (marcar_impresso) antes de imprimir;
  *   - as duas vias de um mesmo pedido saem juntas, num papel só.
  * A diferença é que aqui nada depende de navegador aberto.
+ *
+ * Controle remoto (store.getControle()): se "bloqueado", para tudo e se comporta
+ * como desconectado (o navegador volta a assumir). Se "pausar", comporta como se
+ * o lojista tivesse pausado no proprio PC.
  */
 const api = require('./api');
 const render = require('./render');
@@ -25,9 +29,21 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   let conectado = false;
   let ultimoErro = '';
 
+  // Espera crescente quando o login falha (senha trocada/expirada). Em vez de
+  // martelar o servidor a cada 5s de forma muda, espera 15s, 30s, 60s... ate 5 min,
+  // e avisa uma vez de forma clara que a senha mudou e e preciso entrar de novo.
+  let backoffAuth = 0;      // nivel atual da espera (0 = sem espera)
+  let proximaAuthTs = 0;    // so tenta logar de novo depois deste instante (epoch ms)
+  let avisouSenha = false;  // ja avisou "senha mudou" nesta sequencia de falhas
+
   const fila = [];          // pedidos aguardando impressão (det)
   const naFila = new Set(); // ids já enfileirados, para não duplicar
   let ocupado = false;
+
+  // Esvazia a fila local. Usado ao pausar/bloquear: assim "desconectado" significa
+  // de verdade que nao estamos segurando nenhum pedido. Na proxima volta sem bloqueio,
+  // o tick reescaneia os pedidos em preparo ainda nao impressos e reenfileira.
+  function limparFila() { fila.length = 0; naFila.clear(); }
 
   // Preferencias de impressao resolvidas da loja (largura, fonte, margens).
   function prefsImpressao() {
@@ -35,9 +51,17 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   }
 
   function status() {
+    const ctrl = store.getControle();
     return {
-      conectado,
+      // sob bloqueio, reportamos desconectado para o navegador voltar a assumir
+      conectado: ctrl.bloqueado ? false : conectado,
       pausado: !!store.getConfig().pausado,
+      bloqueado: !!ctrl.bloqueado,
+      pausadoRemoto: !!ctrl.pausar,
+      // true enquanto o login esta falhando (senha trocada/expirada): a janela mostra
+      // um aviso fixo ate o lojista entrar de novo.
+      precisaLogin: !!avisouSenha,
+      versaoRecomendada: ctrl.versao_recomendada || '',
       loja: prefs && (prefs.nome || (prefs.estabelecimento && prefs.estabelecimento.nome)) || '',
       fila: fila.length,
       ultimoErro,
@@ -94,7 +118,11 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   // Processa a fila, um pedido por vez.
   async function processarFila() {
     if (ocupado) return;
-    if (store.getConfig().pausado) return;
+    const ctrl = store.getControle();
+    // Bloqueio/pausa (do usuario ou remota): nao imprime e nao "assume" o pedido
+    // (nao chama marcar_impresso), deixando o navegador cuidar. Esvazia a fila para
+    // nao deixar pedidos presos aqui enquanto o navegador reassume.
+    if (store.getConfig().pausado || ctrl.pausar || ctrl.bloqueado) { limparFila(); return; }
     const det = fila.shift();
     if (!det) return;
     ocupado = true;
@@ -148,9 +176,15 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     rodando = true;
     try {
       const cfg = store.getConfig();
-      if (cfg.pausado) { conectado = false; ultimoErro = ''; emitirStatus(); return; }
+      const ctrl = store.getControle();
+      // Bloqueio remoto, pausa do usuario ou pausa remota: nao busca nem imprime
+      // pedidos. Reporta desconectado para o navegador voltar a assumir.
+      if (cfg.pausado || ctrl.pausar || ctrl.bloqueado) { conectado = false; ultimoErro = ''; limparFila(); emitirStatus(); return; }
+      // Espera crescente apos falha de login: nao tenta de novo antes da hora.
+      if (proximaAuthTs && Date.now() < proximaAuthTs) { conectado = false; emitirStatus(); return; }
       const token = await garantirToken();
       conectado = true; ultimoErro = '';
+      backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // login ok: zera a espera
       await pegarPrefs(cfg.base, token, false);
 
       const lista = await api.listaAbertos(cfg.base, token, 2);
@@ -190,7 +224,18 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     } catch (e) {
       conectado = false;
       ultimoErro = e.message || String(e);
-      if (e.status === 401) { store.limparToken(); onLog('erro', 'Sessão expirada. Verifique e-mail e senha nas configurações.'); }
+      if (e.status === 401) {
+        // Senha trocada ou acesso expirado: limpa o token e espera cada vez mais
+        // antes de tentar de novo (15s, 30s, 60s, 120s... ate 5 min).
+        store.limparToken();
+        backoffAuth = Math.min(backoffAuth + 1, 5);
+        const esperaMs = Math.min(15000 * Math.pow(2, backoffAuth - 1), 5 * 60 * 1000);
+        proximaAuthTs = Date.now() + esperaMs;
+        if (!avisouSenha) {
+          avisouSenha = true;
+          onLog('erro', 'Sua senha mudou ou o acesso expirou. Abra as configurações e entre de novo com e-mail e senha. (nova tentativa em ' + Math.round(esperaMs / 1000) + 's)', { tipo: 'conexao', nivel: 'erro' });
+        }
+      }
       else onLog('erro', ultimoErro);
       emitirStatus();
     } finally {
@@ -201,6 +246,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   function iniciar() {
     parar();
     primeiraVolta = true;
+    backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // reconexao manual: tenta ja
     const seg = Math.max(5, Number(store.getConfig().intervalo) || 12);
     onLog('info', 'Monitorando pedidos a cada ' + seg + ' segundos.');
     tick();

@@ -5,6 +5,10 @@
  * configuração, dos avisos de pedido novo e liga tudo ao cérebro (poller.js).
  * O programa fica rodando em segundo plano; fechar a janela não encerra o app,
  * só some para a bandeja. Encerra de verdade pelo menu "Sair".
+ *
+ * Controle remoto (1.0.7): a resposta da telemetria traz "controle" (bloqueado,
+ * pausar, versao_recomendada). O store guarda e o main reflete no ícone/janela e,
+ * quando ha versao nova, avisa uma vez com um clique que leva a pagina de instalacao.
  */
 const path = require('path');
 const os = require('os');
@@ -22,6 +26,10 @@ const MAX_LOGS = 250;
 const ASSETS = path.join(__dirname, '..', 'assets');
 const UI = path.join(__dirname, '..', 'ui');
 
+// Pagina com o passo a passo para baixar e instalar a versao nova.
+const URL_INSTALACAO = 'https://uaipedidos.com.br/uaipedidos-print-como-instalar';
+let ultimaVersaoAvisada = ''; // evita repetir a notificacao da mesma versao
+
 // Uma instância só (abrir de novo apenas mostra a janela).
 if (!app.requestSingleInstanceLock()) { app.quit(); }
 app.on('second-instance', () => mostrarJanela());
@@ -35,17 +43,42 @@ function registrarLog(nivel, msg, extra) {
   try { if (telemetria) telemetria.registrar(nivel, msg, extra || {}); } catch (e) {}
 }
 
+// Compara versoes "a.b.c": retorna true se 'a' for maior que 'b'.
+function versaoMaior(a, b) {
+  const pa = String(a || '').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0, y = pb[i] || 0;
+    if (x > y) return true;
+    if (x < y) return false;
+  }
+  return false;
+}
+
+// Enriquece o status do poller com a versao instalada e se ha atualizacao, para a
+// janela e o ícone mostrarem o aviso de versao nova.
+function statusCompleto(st) {
+  const s = st || (poller && poller.status()) || {};
+  const versaoAtual = app.getVersion();
+  const atualizar = !!(s.versaoRecomendada && versaoMaior(s.versaoRecomendada, versaoAtual));
+  return Object.assign({}, s, { versaoAtual, atualizar });
+}
+
 // Estado atual resumido, enviado como "sinal de vida" a cada poucos minutos.
 function estadoAtual() {
   const cfg = store.getConfig();
   const s = (poller && poller.status()) || {};
+  const ctrl = store.getControle();
   return {
     impressora: cfg.impressora,
     vias: cfg.vias,
     intervalo: cfg.intervalo,
     copias: cfg.copiasCozinha,
-    pausado: !!cfg.pausado,
-    conectado: !!s.conectado,
+    // "pausado" reflete a pausa local do lojista OU a pausa/bloqueio remoto
+    pausado: !!cfg.pausado || !!ctrl.pausar || !!ctrl.bloqueado,
+    conectado: ctrl.bloqueado ? false : !!s.conectado,
+    bloqueado: !!ctrl.bloqueado,
+    pausa_remota: !!ctrl.pausar,
     loja: s.loja || '',
     ultimo_erro: s.ultimoErro || '',
     ambiente: ambienteCache, // fotografia completa do PC (Windows, impressoras, drivers)
@@ -108,8 +141,13 @@ async function coletarAmbiente(motivo) {
 }
 
 function enviarStatus(st) {
-  if (win && !win.isDestroyed()) win.webContents.send('status', st);
-  atualizarTray(st);
+  const completo = statusCompleto(st);
+  if (win && !win.isDestroyed()) win.webContents.send('status', completo);
+  atualizarTray(completo);
+}
+
+function abrirPaginaInstalacao() {
+  try { shell.openExternal(URL_INSTALACAO); } catch (e) {}
 }
 
 function criarJanela() {
@@ -138,25 +176,33 @@ function mostrarJanela() {
 
 function atualizarTray(st) {
   if (!tray) return;
-  const s = st || (poller && poller.status()) || {};
+  const s = st || statusCompleto();
   const cfg = store.getConfig();
-  const estadoTxt = cfg.pausado ? 'Pausado'
+  const ctrl = store.getControle();
+  const estadoTxt = ctrl.bloqueado ? 'Bloqueado pelo suporte'
+    : ctrl.pausar ? 'Pausado pelo painel'
+    : cfg.pausado ? 'Pausado'
     : s.conectado ? ('Ativo' + (s.loja ? ' - ' + s.loja : ''))
     : 'Desconectado';
   tray.setToolTip('UaiPedidos Print - ' + estadoTxt);
-  const menu = Menu.buildFromTemplate([
+  const itens = [
     { label: 'UaiPedidos Print (' + estadoTxt + ')', enabled: false },
-    { type: 'separator' },
-    { label: 'Abrir configurações', click: () => mostrarJanela() },
-    {
-      label: cfg.pausado ? 'Retomar impressão' : 'Pausar impressão',
-      click: () => alternarPausa(!cfg.pausado),
-    },
-    { label: 'Imprimir teste', click: async () => { await poller.imprimirTeste(); } },
-    { type: 'separator' },
-    { label: 'Sair', click: () => { app.isQuitting = true; app.quit(); } },
-  ]);
-  tray.setContextMenu(menu);
+  ];
+  if (s.atualizar) {
+    itens.push({ label: 'Baixar nova versão (' + s.versaoRecomendada + ')', click: () => abrirPaginaInstalacao() });
+  }
+  itens.push({ type: 'separator' });
+  itens.push({ label: 'Abrir configurações', click: () => mostrarJanela() });
+  itens.push({
+    // Sob bloqueio ou pausa remota do painel, o lojista nao controla a pausa por aqui.
+    label: cfg.pausado ? 'Retomar impressão' : 'Pausar impressão',
+    enabled: !ctrl.bloqueado && !ctrl.pausar,
+    click: () => alternarPausa(!cfg.pausado),
+  });
+  itens.push({ label: 'Imprimir teste', enabled: !ctrl.bloqueado, click: async () => { await poller.imprimirTeste(); } });
+  itens.push({ type: 'separator' });
+  itens.push({ label: 'Sair', click: () => { app.isQuitting = true; app.quit(); } });
+  tray.setContextMenu(Menu.buildFromTemplate(itens));
 }
 
 function alternarPausa(pausado) {
@@ -188,10 +234,40 @@ function avisarPedidoNovo(pedido, quantos) {
   } catch (e) {}
 }
 
+// Notificacao de versao nova disponivel (uma vez por versao). Clicar leva a pagina
+// de instalacao.
+function avisarNovaVersao(versaoNova) {
+  try {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({
+      title: 'Atualização disponível',
+      body: 'Uma nova versão do UaiPedidos Print (' + versaoNova + ') está disponível. Clique para baixar e atualizar.',
+      icon: path.join(ASSETS, 'icon.png'),
+      silent: true,
+    });
+    n.on('click', () => abrirPaginaInstalacao());
+    n.show();
+  } catch (e) {}
+}
+
+// Chamado quando a telemetria traz o bloco de controle do servidor.
+function aoReceberControle(ctrl) {
+  // Reflete imediatamente no ícone/janela (bloqueio, pausa remota, aviso de versao).
+  try { enviarStatus(poller ? poller.status() : null); } catch (e) {}
+  // Aviso de versao nova: so uma vez por versao recomendada.
+  try {
+    const rec = ctrl && ctrl.versao_recomendada;
+    if (rec && versaoMaior(rec, app.getVersion()) && rec !== ultimaVersaoAvisada) {
+      ultimaVersaoAvisada = rec;
+      avisarNovaVersao(rec);
+    }
+  } catch (e) {}
+}
+
 function configurarIpc() {
   ipcMain.handle('config:get', () => store.getConfig());
   ipcMain.handle('logs:recentes', () => logs.slice(-120));
-  ipcMain.handle('status:get', () => poller.status());
+  ipcMain.handle('status:get', () => statusCompleto());
 
   ipcMain.handle('config:salvar', (_e, parcial) => {
     const permitido = {};
@@ -243,6 +319,7 @@ function configurarIpc() {
   ipcMain.handle('teste:imprimir', () => poller.imprimirTeste());
   ipcMain.handle('pausa:alternar', (_e, v) => { alternarPausa(!!v); return store.getConfig(); });
   ipcMain.handle('abrir:pasta', () => { shell.openPath(store.pastaDados()); return true; });
+  ipcMain.handle('abrir:instalacao', () => { abrirPaginaInstalacao(); return true; });
 }
 
 app.whenReady().then(() => {
@@ -255,9 +332,10 @@ app.whenReady().then(() => {
     onNovoPedido: avisarPedidoNovo,
   });
 
-  // Telemetria: envia o diario de bordo (estado + eventos) ao servidor.
+  // Telemetria: envia o diario de bordo (estado + eventos) ao servidor e recebe o
+  // bloco de controle, que repassamos para aoReceberControle.
   telemetria = require('./telemetria');
-  telemetria.iniciar({ versao: app.getVersion(), getEstado: estadoAtual });
+  telemetria.iniciar({ versao: app.getVersion(), getEstado: estadoAtual, onControle: aoReceberControle });
   registrarLog('info', 'UaiPedidos Print iniciado (versao ' + app.getVersion() + ').', { tipo: 'inicio' });
   coletarAmbiente('inicio');
   // Reconfere o ambiente (impressoras, driver padrao, etc.) a cada 30 min.

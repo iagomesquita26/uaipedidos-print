@@ -73,6 +73,19 @@ function decifrar(valor) {
 let _cfg = lerJson(ARQ_CFG, CFG_PADRAO);
 let _estado = lerJson(ARQ_ESTADO, ESTADO_PADRAO);
 
+// Controle remoto (vem na resposta do print_log). So em memoria de proposito: ao
+// reiniciar, volta ao normal ate o servidor confirmar de novo o bloqueio/pausa.
+let _controle = { bloqueado: false, pausar: false, versao_recomendada: '' };
+function setControle(c) {
+  if (!c || typeof c !== 'object') return;
+  _controle = {
+    bloqueado: !!c.bloqueado,
+    pausar: !!c.pausar,
+    versao_recomendada: String(c.versao_recomendada || ''),
+  };
+}
+function getControle() { return { ..._controle }; }
+
 function getConfig() {
   // devolve uma cópia sem expor os segredos crus
   const c = { ..._cfg };
@@ -149,4 +162,5 @@ module.exports = {
   getConfig, setConfig, setSenha, getSenha, setToken, getToken, limparToken,
   getEstado, setLastSeen, jaProcessado, marcarProcessado, pastaDados,
   getAgenteId, teleAdicionar, teleLista, teleRemover, teleTamanho,
+  setControle, getControle,
 };

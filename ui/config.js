@@ -28,12 +28,30 @@ function aviso(el, tipo, msg) {
 
 function aplicarStatus(st) {
   const pill = $('statusPill');
+  // "pausado" aqui e a pausa local do lojista. Bloqueio e pausa remota vem a parte.
   pausadoAtual = !!st.pausado;
-  if (st.pausado) { pill.className = 'pill pause'; pill.textContent = 'Pausado'; }
+  if (st.bloqueado) { pill.className = 'pill off'; pill.textContent = 'Bloqueado pelo suporte'; }
+  else if (st.pausadoRemoto) { pill.className = 'pill pause'; pill.textContent = 'Pausado pelo painel'; }
+  else if (st.pausado) { pill.className = 'pill pause'; pill.textContent = 'Pausado'; }
   else if (st.conectado) { pill.className = 'pill on'; pill.textContent = st.fila > 0 ? ('Imprimindo (' + st.fila + ')') : 'Ativo'; }
+  else if (st.precisaLogin) { pill.className = 'pill off'; pill.textContent = 'Senha mudou, entre de novo'; }
   else { pill.className = 'pill off'; pill.textContent = 'Desconectado'; }
   if (st.loja) $('lojaNome').textContent = st.loja;
   $('btnPausa').textContent = st.pausado ? 'Retomar' : 'Pausar';
+  // Sob bloqueio ou pausa remota do painel, o lojista nao controla a pausa por aqui
+  // (evita a confusao de "pausar" algo que o painel ja parou).
+  $('btnPausa').disabled = !!st.bloqueado || !!st.pausadoRemoto;
+
+  // Banner de versao nova disponivel.
+  const banner = $('avisoVersao');
+  if (banner) {
+    if (st.atualizar && st.versaoRecomendada) {
+      banner.style.display = 'block';
+      banner.textContent = 'Nova versão disponível (' + st.versaoRecomendada + '). Clique aqui para baixar e atualizar.';
+    } else {
+      banner.style.display = 'none';
+    }
+  }
 }
 
 function mostrarConectado(conectado, loja) {
@@ -113,6 +131,9 @@ $('btnPausa').addEventListener('click', async () => {
 
 $('btnAtualizarImp').addEventListener('click', () => carregarImpressoras());
 $('btnPasta').addEventListener('click', () => window.uai.abrirPasta());
+
+// Banner de versao nova: clicar abre a pagina de instalacao.
+$('avisoVersao').addEventListener('click', () => window.uai.abrirInstalacao());
 
 // mostra/esconde as configurações avançadas
 $('btnAvancado').addEventListener('click', () => {

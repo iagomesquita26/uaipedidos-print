@@ -35,7 +35,10 @@ async function req(base, caminho, { method = 'GET', token = null, body = null } 
   const txt = await resp.text();
   let dados = null;
   try { dados = txt ? JSON.parse(txt) : null; } catch (e) { dados = null; }
-  if (resp.status === 401) throw new ApiError((dados && dados.erro) || 'Sessão expirada, faça login de novo', 401);
+  // 401 (token invalido/versao velha) e 403 (loja desativada/sem acesso) tratamos
+  // igual: a sessao nao vale mais, pedir login de novo. Normalizamos para 401 para
+  // que os tratadores existentes (e.status === 401) cubram os dois casos.
+  if (resp.status === 401 || resp.status === 403) throw new ApiError((dados && dados.erro) || 'Sessão expirada, faça login de novo', 401);
   if (!resp.ok) throw new ApiError((dados && dados.erro) || ('Erro ' + resp.status), resp.status);
   return dados;
 }
@@ -74,7 +77,8 @@ function marcarImpresso(base, token, id) {
 }
 
 // POST /api/estab/print_log {agente_id, versao, so, maquina, estado, eventos:[...]}
-// Envia o diario de bordo (estado atual + lote de eventos) para o servidor.
+// Envia o diario de bordo (estado atual + lote de eventos) para o servidor e
+// recebe de volta o bloco "controle" (bloqueado, pausar, versao_recomendada).
 function enviarLog(base, token, payload) {
   return req(base, '/api/estab/print_log', { method: 'POST', token, body: payload });
 }
