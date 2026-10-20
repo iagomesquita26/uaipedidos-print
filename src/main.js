@@ -69,7 +69,8 @@ function statusCompleto(st) {
   const s = st || (poller && poller.status()) || {};
   const versaoAtual = app.getVersion();
   const atualizar = !!(s.versaoRecomendada && versaoMaior(s.versaoRecomendada, versaoAtual));
-  return Object.assign({}, s, { versaoAtual, atualizar });
+  const recado = (() => { try { return store.getConfig().recado || ''; } catch (e) { return ''; } })();
+  return Object.assign({}, s, { versaoAtual, atualizar, recado });
 }
 
 // Estado atual resumido, enviado como "sinal de vida" a cada poucos minutos.
@@ -183,10 +184,26 @@ async function atualizarAgora(origem) {
       await shell.openPath(destino);
       return { ok: true, msg: 'Instalador aberto no computador' };
     }
-    // Mac (e outros): abre a pagina de instalacao.
+    if (process.platform === 'darwin') {
+      // Mac: baixa o .dmg e abre. O app nao e assinado pela Apple, entao nao da para
+      // trocar sozinho: o lojista arrasta o programa para a pasta Aplicativos (por
+      // cima do antigo). Melhor que so abrir a pagina, mas o passo final e manual.
+      const url = base + '/downloads/UaiPedidos-Print-mac.dmg';
+      const destino = path.join(app.getPath('temp'), 'UaiPedidos-Print.dmg');
+      registrarLog('info', 'Baixando a nova versao do UaiPedidos Print...', { tipo: 'config' });
+      const resp = await fetch(url, { redirect: 'follow' });
+      if (!resp || !resp.ok) throw new Error('download falhou (' + (resp && resp.status) + ')');
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (!buf.length) throw new Error('instalador vazio');
+      fs.writeFileSync(destino, buf);
+      registrarLog('ok', 'Instalador baixado. Abrindo para atualizar.', { tipo: 'config' });
+      await shell.openPath(destino);
+      return { ok: true, msg: 'Instalador aberto. Arraste o UaiPedidos Print para a pasta Aplicativos.' };
+    }
+    // Outros sistemas: abre a pagina de instalacao.
     abrirPaginaInstalacao();
     registrarLog('info', 'Abri a pagina de instalacao para atualizar (atualizacao manual).', { tipo: 'config' });
-    return { ok: true, msg: 'Pagina de instalacao aberta (atualizacao manual no Mac)' };
+    return { ok: true, msg: 'Pagina de instalacao aberta (atualizacao manual)' };
   } catch (e) {
     const erro = (e && e.message) || String(e);
     registrarLog('erro', 'Falha ao atualizar: ' + erro, { tipo: 'config', nivel: 'erro' });
@@ -207,6 +224,28 @@ function aplicarConfigRemota(permitido) {
     coletarAmbiente('config');
     enviarStatus(poller ? poller.status() : null);
   } catch (e) {}
+}
+
+// Mostra (ou limpa) o recado do suporte na tela. O texto ja foi gravado no config
+// pelo comando 'recado'; aqui so empurramos o novo status para a janela.
+function mostrarRecado() {
+  try {
+    const texto = store.getConfig().recado || '';
+    registrarLog('info', texto ? ('Recado do suporte: ' + texto) : 'Recado do suporte removido.', { tipo: 'config' });
+    enviarStatus(poller ? poller.status() : null);
+  } catch (e) {}
+}
+
+// Desconecta a loja (logout). Usado pelo botao "Desconectar" da tela e pelo comando
+// 'deslogar' do suporte. Quem chama deve garantir o flush da telemetria ANTES,
+// pois aqui o token e apagado e o envio pos-logout nao teria como autenticar.
+function fazerLogout(motivo) {
+  registrarLog('aviso', 'Desconectado da loja' + (motivo ? ' (' + motivo + ')' : '') + '.', { tipo: 'conexao' });
+  store.limparToken();
+  store.setConfig({ email: '' });
+  store.setSenha('');
+  if (poller) poller.parar();
+  enviarStatus(poller ? poller.status() : null);
 }
 
 function criarJanela() {
@@ -363,14 +402,9 @@ function configurarIpc() {
   });
 
   ipcMain.handle('auth:sair', async () => {
-    // Registra e tenta enviar a desconexao ANTES de apagar o token (senao nao envia).
-    registrarLog('aviso', 'Desconectado da loja.', { tipo: 'conexao' });
+    // Envia a telemetria pendente ANTES de apagar o token (senao nao envia).
     try { if (telemetria) await telemetria.flush(true); } catch (e) {}
-    store.limparToken();
-    store.setConfig({ email: '' });
-    store.setSenha('');
-    poller.parar();
-    enviarStatus(poller.status());
+    fazerLogout();
     return store.getConfig();
   });
 
@@ -403,6 +437,8 @@ app.whenReady().then(() => {
     coletarAmbiente,
     aplicarConfig: aplicarConfigRemota,
     atualizarAgora,
+    mostrarRecado,
+    deslogar: () => fazerLogout('comando do suporte'),
   });
   telemetria = require('./telemetria');
   telemetria.iniciar({

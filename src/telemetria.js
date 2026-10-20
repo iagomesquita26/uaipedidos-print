@@ -19,7 +19,7 @@ const api = require('./api');
 const store = require('./store');
 
 const FLUSH_MS = 30 * 1000;        // tenta enviar a cada 30s
-const HEARTBEAT_MS = 2 * 60 * 1000; // sinal de vida no maximo a cada 2 min
+const HEARTBEAT_MS = 30 * 1000;     // sinal de vida a cada 30s (pega comandos rapido)
 const LOTE_MAX = 200;               // eventos por envio
 
 let timer = null;

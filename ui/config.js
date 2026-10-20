@@ -55,6 +55,18 @@ function aplicarStatus(st) {
       banner.style.display = 'none';
     }
   }
+
+  // Recado do suporte: mostra o texto quando houver, esconde quando vazio.
+  const rec = $('avisoRecado');
+  if (rec) {
+    const rtxt = $('avisoRecadoTxt');
+    if (st.recado) {
+      rec.style.display = 'block';
+      if (rtxt) rtxt.textContent = st.recado;
+    } else {
+      rec.style.display = 'none';
+    }
+  }
 }
 
 function mostrarConectado(conectado, loja) {

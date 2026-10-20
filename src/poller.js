@@ -277,6 +277,22 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   // NAO usa a trava do servidor (marcar_impresso): e uma segunda via proposital,
   // mesmo que o pedido ja tenha sido impresso antes. Aceita { pedido_id } ou
   // { pedido_numero }. Devolve { ok } ou { ok:false, erro }.
+  // Imprime uma segunda via de um pedido ja conhecido (por id). Nao usa a trava do
+  // servidor. Usado tanto pela reimpressao de um pedido quanto pela de varios.
+  async function reimprimirUmId(cfg, token, id) {
+    const d = await api.detalhe(cfg.base, token, id);
+    if (!d || !d.pedido) return { ok: false, erro: 'pedido nao encontrado' };
+    const det = { pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] };
+    const numero = d.pedido.numero || id;
+    const escolha = escolhaVias();
+    const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
+    if (!html) return { ok: false, erro: 'pedido sem vias para imprimir', numero };
+    onLog('info', 'Reimprimindo o pedido #' + numero + ' (pedido do suporte)...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+    await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
+    onLog('ok', 'Pedido #' + numero + ' reimpresso (segunda via do suporte).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+    return { ok: true, numero: numero };
+  }
+
   async function reimprimir(sel) {
     const cfg = store.getConfig();
     try {
@@ -290,21 +306,45 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
         if (ped) id = Number(ped.id);
       }
       if (!id) return { ok: false, erro: 'pedido nao encontrado' };
-      const d = await api.detalhe(cfg.base, token, id);
-      if (!d || !d.pedido) return { ok: false, erro: 'pedido nao encontrado' };
-      const det = { pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] };
-      const numero = d.pedido.numero || id;
-      const escolha = escolhaVias();
-      const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
-      if (!html) return { ok: false, erro: 'pedido sem vias para imprimir' };
-      onLog('info', 'Reimprimindo o pedido #' + numero + ' (pedido do suporte)...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
-      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-      onLog('ok', 'Pedido #' + numero + ' reimpresso (segunda via do suporte).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
-      return { ok: true, numero: numero };
+      return await reimprimirUmId(cfg, token, id);
     } catch (e) {
       const erro = e.message || String(e);
       if (e.status === 401) store.limparToken();
       onLog('erro', 'Falha ao reimprimir: ' + erro, { tipo: 'impressao', nivel: 'erro', dados: { erro: erro } });
+      return { ok: false, erro: erro };
+    }
+  }
+
+  // Reimpressao em lote a pedido do suporte: os N pedidos EM ABERTO mais recentes
+  // (o endpoint so lista pedidos abertos), do mais novo para o mais antigo. Pedido ja
+  // finalizado nao entra. Devolve a lista de numeros feitos e os que deram erro.
+  async function reimprimirUltimos(n) {
+    const cfg = store.getConfig();
+    const quantos = Math.max(1, Math.min(20, Number(n) || 1));
+    try {
+      const token = await garantirToken();
+      try { await pegarPrefs(cfg.base, token, false); } catch (e) {}
+      const lista = await api.listaAbertos(cfg.base, token, 7);
+      const pedidos = ((lista && lista.pedidos) || [])
+        .slice()
+        .sort((a, b) => Number(b.id) - Number(a.id))
+        .slice(0, quantos);
+      if (!pedidos.length) return { ok: false, erro: 'nenhum pedido em aberto para reimprimir' };
+      const feitos = [], erros = [];
+      for (const p of pedidos) {
+        try {
+          const r = await reimprimirUmId(cfg, token, Number(p.id));
+          if (r && r.ok) feitos.push(r.numero); else erros.push(p.numero || p.id);
+        } catch (e) {
+          if (e.status === 401) { store.limparToken(); throw e; }
+          erros.push(p.numero || p.id);
+        }
+      }
+      return { ok: true, feitos, erros };
+    } catch (e) {
+      const erro = e.message || String(e);
+      if (e.status === 401) store.limparToken();
+      onLog('erro', 'Falha ao reimprimir em lote: ' + erro, { tipo: 'impressao', nivel: 'erro', dados: { erro: erro } });
       return { ok: false, erro: erro };
     }
   }
@@ -316,7 +356,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     emitirStatus();
   }
 
-  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, limparFila: limparFilaPublica, status, prefsImpressao, get conectado() { return conectado; } };
+  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao, get conectado() { return conectado; } };
 }
 
 module.exports = { criarPoller };

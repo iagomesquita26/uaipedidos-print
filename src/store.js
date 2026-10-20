@@ -29,6 +29,7 @@ const CFG_PADRAO = {
   som: true,          // aviso sonoro ao chegar pedido
   autostart: true,    // iniciar junto com o computador
   pausado: false,     // impressão pausada pelo usuário
+  recado: '',         // recado do suporte exibido na tela (vazio = sem recado)
 };
 
 const ESTADO_PADRAO = {
