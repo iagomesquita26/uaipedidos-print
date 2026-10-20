@@ -273,7 +273,50 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     }
   }
 
-  return { iniciar, parar, reiniciar, tick, imprimirTeste, status, prefsImpressao, get conectado() { return conectado; } };
+  // Reimpressao a pedido do suporte (painel/admin). Ao contrario da fila normal,
+  // NAO usa a trava do servidor (marcar_impresso): e uma segunda via proposital,
+  // mesmo que o pedido ja tenha sido impresso antes. Aceita { pedido_id } ou
+  // { pedido_numero }. Devolve { ok } ou { ok:false, erro }.
+  async function reimprimir(sel) {
+    const cfg = store.getConfig();
+    try {
+      const token = await garantirToken();
+      try { await pegarPrefs(cfg.base, token, false); } catch (e) {}
+      let id = Number(sel && sel.pedido_id) || 0;
+      const numeroBusca = sel && (sel.pedido_numero != null ? String(sel.pedido_numero) : '');
+      if (!id && numeroBusca) {
+        const lista = await api.listaAbertos(cfg.base, token, 7);
+        const ped = ((lista && lista.pedidos) || []).find(p => String(p.numero) === numeroBusca);
+        if (ped) id = Number(ped.id);
+      }
+      if (!id) return { ok: false, erro: 'pedido nao encontrado' };
+      const d = await api.detalhe(cfg.base, token, id);
+      if (!d || !d.pedido) return { ok: false, erro: 'pedido nao encontrado' };
+      const det = { pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] };
+      const numero = d.pedido.numero || id;
+      const escolha = escolhaVias();
+      const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
+      if (!html) return { ok: false, erro: 'pedido sem vias para imprimir' };
+      onLog('info', 'Reimprimindo o pedido #' + numero + ' (pedido do suporte)...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
+      onLog('ok', 'Pedido #' + numero + ' reimpresso (segunda via do suporte).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+      return { ok: true, numero: numero };
+    } catch (e) {
+      const erro = e.message || String(e);
+      if (e.status === 401) store.limparToken();
+      onLog('erro', 'Falha ao reimprimir: ' + erro, { tipo: 'impressao', nivel: 'erro', dados: { erro: erro } });
+      return { ok: false, erro: erro };
+    }
+  }
+
+  // Limpa a fila local a pedido do suporte, e deixa claro no diario de bordo.
+  function limparFilaPublica() {
+    limparFila();
+    onLog('info', 'Fila de impressao limpa pelo suporte.', { tipo: 'impressao' });
+    emitirStatus();
+  }
+
+  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, limparFila: limparFilaPublica, status, prefsImpressao, get conectado() { return conectado; } };
 }
 
 module.exports = { criarPoller };

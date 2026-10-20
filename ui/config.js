@@ -2,6 +2,7 @@
 /* Comportamento da tela de configuração. Fala com o programa pela ponte "uai". */
 const $ = id => document.getElementById(id);
 let pausadoAtual = false;
+let atualizandoAgora = false; // trava o texto do banner enquanto a atualizacao roda
 
 function fmtHora(ts) {
   const d = new Date(ts), p = n => String(n).padStart(2, '0');
@@ -42,12 +43,14 @@ function aplicarStatus(st) {
   // (evita a confusao de "pausar" algo que o painel ja parou).
   $('btnPausa').disabled = !!st.bloqueado || !!st.pausadoRemoto;
 
-  // Banner de versao nova disponivel.
+  // Banner de versao nova disponivel. So aparece quando ha atualizacao; o lojista
+  // clica em "Atualizar agora" quando quiser (nunca atualiza sozinho).
   const banner = $('avisoVersao');
   if (banner) {
+    const txt = $('avisoVersaoTxt');
     if (st.atualizar && st.versaoRecomendada) {
       banner.style.display = 'block';
-      banner.textContent = 'Nova versão disponível (' + st.versaoRecomendada + '). Clique aqui para baixar e atualizar.';
+      if (txt && !atualizandoAgora) txt.textContent = 'Nova versão disponível (' + st.versaoRecomendada + '). Clique em Atualizar agora quando puder.';
     } else {
       banner.style.display = 'none';
     }
@@ -132,8 +135,25 @@ $('btnPausa').addEventListener('click', async () => {
 $('btnAtualizarImp').addEventListener('click', () => carregarImpressoras());
 $('btnPasta').addEventListener('click', () => window.uai.abrirPasta());
 
-// Banner de versao nova: clicar abre a pagina de instalacao.
-$('avisoVersao').addEventListener('click', () => window.uai.abrirInstalacao());
+// Banner de versao nova: o botao "Atualizar agora" baixa e abre o instalador
+// (Windows) ou abre a pagina de instalacao (Mac). Nunca atualiza sozinho.
+$('btnAtualizar').addEventListener('click', async () => {
+  const b = $('btnAtualizar');
+  const txt = $('avisoVersaoTxt');
+  atualizandoAgora = true;
+  b.disabled = true;
+  b.textContent = 'Atualizando...';
+  if (txt) txt.textContent = 'Baixando a nova versão, aguarde...';
+  let r = null;
+  try { r = await window.uai.atualizarAgora(); } catch (e) { r = { ok: false, erro: (e && e.message) || 'falha' }; }
+  b.disabled = false;
+  b.textContent = 'Atualizar agora';
+  if (txt) {
+    if (r && r.ok) txt.textContent = r.msg || 'Atualização iniciada. Siga o instalador que abriu.';
+    else txt.textContent = 'Não consegui atualizar agora' + (r && r.erro ? ' (' + r.erro + ')' : '') + '. Tente de novo em instantes.';
+  }
+  atualizandoAgora = false;
+});
 
 // mostra/esconde as configurações avançadas
 $('btnAvancado').addEventListener('click', () => {

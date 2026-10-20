@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('uai', {
   logsRecentes: () => ipcRenderer.invoke('logs:recentes'),
   abrirPasta: () => ipcRenderer.invoke('abrir:pasta'),
   abrirInstalacao: () => ipcRenderer.invoke('abrir:instalacao'),
+  atualizarAgora: () => ipcRenderer.invoke('atualizar:agora'),
   onLog: (cb) => ipcRenderer.on('log', (_e, item) => cb(item)),
   onStatus: (cb) => ipcRenderer.on('status', (_e, st) => cb(st)),
 });

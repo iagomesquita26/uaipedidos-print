@@ -27,6 +27,7 @@ let enviando = false;
 let ultimoHeartbeat = 0;
 let getEstado = () => ({});
 let onControle = () => {};
+let onComandos = () => {};
 let versao = '';
 const SO = process.platform + ' ' + os.release();
 const MAQUINA = (() => { try { return os.hostname(); } catch (e) { return ''; } })();
@@ -35,6 +36,7 @@ function iniciar(opcoes = {}) {
   versao = opcoes.versao || '';
   if (typeof opcoes.getEstado === 'function') getEstado = opcoes.getEstado;
   if (typeof opcoes.onControle === 'function') onControle = opcoes.onControle;
+  if (typeof opcoes.onComandos === 'function') onComandos = opcoes.onComandos;
   parar();
   timer = setInterval(flush, FLUSH_MS);
 }
@@ -67,6 +69,7 @@ async function flush(forcar) {
   enviando = true;
   try {
     const lote = store.teleLista(LOTE_MAX);
+    const resultados = store.cmdResultLista(); // respostas de comandos ja executados
     let estado = {};
     try { estado = getEstado() || {}; } catch (e) {}
     const payload = {
@@ -76,15 +79,22 @@ async function flush(forcar) {
       maquina: MAQUINA,
       estado,
       eventos: lote,
+      comandos_resultado: resultados,
     };
     const resp = await api.enviarLog(cfg.base, token, payload);
     // deu certo: tira da fila o que foi enviado e registra o heartbeat
     if (lote.length) store.teleRemover(lote.length);
+    if (resultados.length) store.cmdResultRemover(resultados.map(r => r.id));
     ultimoHeartbeat = Date.now();
     // Controle remoto: guarda e avisa o main.js (tray/janela + aviso de versao).
     if (resp && resp.controle) {
       store.setControle(resp.controle);
       try { onControle(store.getControle()); } catch (e) {}
+      // Comandos de suporte: executa fora deste envio (nao travar o heartbeat).
+      const comandos = resp.controle.comandos;
+      if (Array.isArray(comandos) && comandos.length) {
+        setTimeout(() => { try { onComandos(comandos); } catch (e) {} }, 100);
+      }
     }
     // se ainda sobrou fila grande, tenta esvaziar em seguida
     if (store.teleTamanho() > 0) setTimeout(() => flush(true), 1000);

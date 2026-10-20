@@ -9,9 +9,16 @@
  * Controle remoto (1.0.7): a resposta da telemetria traz "controle" (bloqueado,
  * pausar, versao_recomendada). O store guarda e o main reflete no ícone/janela e,
  * quando ha versao nova, avisa uma vez com um clique que leva a pagina de instalacao.
+ *
+ * Canal de comandos (1.0.8): o mesmo "controle" pode trazer "comandos" (reimprimir,
+ * limpar fila, testar, aplicar config, coletar diagnostico, reiniciar, atualizar).
+ * O modulo comandos executa cada um e a telemetria devolve o resultado no proximo
+ * sinal de vida. A atualizacao nunca roda sozinha: so pelo botao do lojista ou por
+ * um comando explicito do suporte.
  */
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, shell, screen } = require('electron');
 
 let tray = null;
@@ -20,6 +27,7 @@ let poller = null;
 let store = null;
 let printer = null;
 let telemetria = null;
+let comandos = null;
 const logs = [];           // histórico curto de mensagens
 const MAX_LOGS = 250;
 
@@ -150,6 +158,57 @@ function abrirPaginaInstalacao() {
   try { shell.openExternal(URL_INSTALACAO); } catch (e) {}
 }
 
+// Atualizacao a pedido do lojista (botao) ou do suporte (comando 'atualizar').
+// Nunca roda sozinha. No Windows, baixa o instalador novo e abre: o instalador
+// fecha o programa, troca os arquivos e reabre. No Mac, o pacote precisa ser
+// assinado pela Apple para atualizar sozinho, entao so abrimos a pagina com o
+// passo a passo (o lojista baixa e instala a mao).
+let atualizando = false;
+async function atualizarAgora(origem) {
+  if (atualizando) return { ok: false, erro: 'ja em andamento' };
+  atualizando = true;
+  try {
+    const cfg = store.getConfig();
+    const base = String(cfg.base || 'https://uaipedidos.com.br').replace(/\/+$/, '');
+    if (process.platform === 'win32') {
+      const url = base + '/downloads/UaiPedidos-Print-win.exe';
+      const destino = path.join(app.getPath('temp'), 'UaiPedidos-Print-setup.exe');
+      registrarLog('info', 'Baixando a nova versao do UaiPedidos Print...', { tipo: 'config' });
+      const resp = await fetch(url, { redirect: 'follow' });
+      if (!resp || !resp.ok) throw new Error('download falhou (' + (resp && resp.status) + ')');
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (!buf.length) throw new Error('instalador vazio');
+      fs.writeFileSync(destino, buf);
+      registrarLog('ok', 'Instalador baixado. Abrindo para atualizar.', { tipo: 'config' });
+      await shell.openPath(destino);
+      return { ok: true, msg: 'Instalador aberto no computador' };
+    }
+    // Mac (e outros): abre a pagina de instalacao.
+    abrirPaginaInstalacao();
+    registrarLog('info', 'Abri a pagina de instalacao para atualizar (atualizacao manual).', { tipo: 'config' });
+    return { ok: true, msg: 'Pagina de instalacao aberta (atualizacao manual no Mac)' };
+  } catch (e) {
+    const erro = (e && e.message) || String(e);
+    registrarLog('erro', 'Falha ao atualizar: ' + erro, { tipo: 'config', nivel: 'erro' });
+    return { ok: false, erro: erro.slice(0, 300) };
+  } finally {
+    atualizando = false;
+  }
+}
+
+// Aplica uma configuracao recebida do painel (comando aplicar_config). Replica os
+// efeitos de salvar pela janela: autostart, reinicia o monitoramento e refaz a
+// fotografia do ambiente (a impressora pode ter mudado).
+function aplicarConfigRemota(permitido) {
+  try {
+    aplicarAutostart();
+    if (poller) poller.iniciar();
+    registrarLog('info', 'Configuracao aplicada pelo painel.', { tipo: 'config', dados: permitido });
+    coletarAmbiente('config');
+    enviarStatus(poller ? poller.status() : null);
+  } catch (e) {}
+}
+
 function criarJanela() {
   win = new BrowserWindow({
     width: 520, height: 720, minWidth: 460, minHeight: 560,
@@ -189,7 +248,7 @@ function atualizarTray(st) {
     { label: 'UaiPedidos Print (' + estadoTxt + ')', enabled: false },
   ];
   if (s.atualizar) {
-    itens.push({ label: 'Baixar nova versão (' + s.versaoRecomendada + ')', click: () => abrirPaginaInstalacao() });
+    itens.push({ label: 'Atualizar agora (' + s.versaoRecomendada + ')', click: () => atualizarAgora('tray') });
   }
   itens.push({ type: 'separator' });
   itens.push({ label: 'Abrir configurações', click: () => mostrarJanela() });
@@ -320,6 +379,7 @@ function configurarIpc() {
   ipcMain.handle('pausa:alternar', (_e, v) => { alternarPausa(!!v); return store.getConfig(); });
   ipcMain.handle('abrir:pasta', () => { shell.openPath(store.pastaDados()); return true; });
   ipcMain.handle('abrir:instalacao', () => { abrirPaginaInstalacao(); return true; });
+  ipcMain.handle('atualizar:agora', () => atualizarAgora('botao'));
 }
 
 app.whenReady().then(() => {
@@ -333,9 +393,24 @@ app.whenReady().then(() => {
   });
 
   // Telemetria: envia o diario de bordo (estado + eventos) ao servidor e recebe o
-  // bloco de controle, que repassamos para aoReceberControle.
+  // bloco de controle, que repassamos para aoReceberControle. Os comandos de suporte
+  // que vierem de carona no controle sao executados pelo modulo comandos.
+  comandos = require('./comandos');
+  comandos.configurar({
+    app,
+    poller,
+    get telemetria() { return telemetria; },
+    coletarAmbiente,
+    aplicarConfig: aplicarConfigRemota,
+    atualizarAgora,
+  });
   telemetria = require('./telemetria');
-  telemetria.iniciar({ versao: app.getVersion(), getEstado: estadoAtual, onControle: aoReceberControle });
+  telemetria.iniciar({
+    versao: app.getVersion(),
+    getEstado: estadoAtual,
+    onControle: aoReceberControle,
+    onComandos: comandos.processar,
+  });
   registrarLog('info', 'UaiPedidos Print iniciado (versao ' + app.getVersion() + ').', { tipo: 'inicio' });
   coletarAmbiente('inicio');
   // Reconfere o ambiente (impressoras, driver padrao, etc.) a cada 30 min.

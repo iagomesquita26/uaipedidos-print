@@ -13,6 +13,7 @@ const DIR = app.getPath('userData');
 const ARQ_CFG = path.join(DIR, 'config.json');
 const ARQ_ESTADO = path.join(DIR, 'estado.json');
 const ARQ_TELE = path.join(DIR, 'telemetria.json'); // fila de eventos p/ o servidor
+const ARQ_CMD = path.join(DIR, 'comandos.json');    // controle dos comandos de suporte
 const TELE_MAX = 5000; // teto da fila local (se ficar offline muito tempo)
 
 const CFG_PADRAO = {
@@ -158,9 +159,47 @@ function teleRemover(qtd) {
 }
 function teleTamanho() { return _tele.fila.length; }
 
+// ------- comandos de suporte (vem na resposta do print_log e sao executados aqui) -------
+// feitos:     ids ja executados, para nao repetir se o servidor reenviar por engano.
+// resultados: respostas prontas esperando o proximo sinal de vida para voltar ao painel.
+//             Fica em disco de proposito: se o comando reiniciar/atualizar o programa, o
+//             resultado sobrevive ao reinicio e e enviado quando o programa voltar.
+let _cmd = lerJson(ARQ_CMD, { feitos: [], resultados: [] });
+if (!Array.isArray(_cmd.feitos)) _cmd.feitos = [];
+if (!Array.isArray(_cmd.resultados)) _cmd.resultados = [];
+function cmdJaFeito(id) { return _cmd.feitos.includes(Number(id)); }
+function cmdMarcarFeito(id) {
+  const n = Number(id);
+  if (!_cmd.feitos.includes(n)) {
+    _cmd.feitos.push(n);
+    if (_cmd.feitos.length > 500) _cmd.feitos = _cmd.feitos.slice(-500);
+    salvarJson(ARQ_CMD, _cmd);
+  }
+}
+function cmdResultAdicionar(res) {
+  if (!res || !res.id) return;
+  // se ja houver um resultado para esse id, substitui (o ultimo manda)
+  _cmd.resultados = _cmd.resultados.filter(r => Number(r.id) !== Number(res.id));
+  _cmd.resultados.push({
+    id: Number(res.id),
+    status: String(res.status || 'concluido'),
+    resultado: String(res.resultado || '').slice(0, 500),
+  });
+  if (_cmd.resultados.length > 200) _cmd.resultados = _cmd.resultados.slice(-200);
+  salvarJson(ARQ_CMD, _cmd);
+}
+function cmdResultLista() { return _cmd.resultados.slice(); }
+function cmdResultRemover(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  const rem = ids.map(Number);
+  _cmd.resultados = _cmd.resultados.filter(r => !rem.includes(Number(r.id)));
+  salvarJson(ARQ_CMD, _cmd);
+}
+
 module.exports = {
   getConfig, setConfig, setSenha, getSenha, setToken, getToken, limparToken,
   getEstado, setLastSeen, jaProcessado, marcarProcessado, pastaDados,
   getAgenteId, teleAdicionar, teleLista, teleRemover, teleTamanho,
   setControle, getControle,
+  cmdJaFeito, cmdMarcarFeito, cmdResultAdicionar, cmdResultLista, cmdResultRemover,
 };

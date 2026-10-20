@@ -14,8 +14,12 @@
 </header>
 
 <main>
-  <!-- Aviso de versao nova (clicavel): some quando nao ha atualizacao -->
-  <div id="avisoVersao" style="display:none;cursor:pointer;background:#fff4e0;border:1px solid #f3d79a;color:#8a5a00;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px;font-weight:600"></div>
+  <!-- Aviso de versao nova: some quando nao ha atualizacao. O lojista clica em
+       "Atualizar agora" quando quiser (nunca atualiza sozinho). -->
+  <div id="avisoVersao" style="display:none;background:#fff4e0;border:1px solid #f3d79a;color:#8a5a00;border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px">
+    <div id="avisoVersaoTxt" style="font-weight:600;margin-bottom:8px"></div>
+    <button id="btnAtualizar" class="b-primary">Atualizar agora</button>
+  </div>
 
   <!-- Conta da loja -->
   <section class="card">
