@@ -63,6 +63,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       precisaLogin: !!avisouSenha,
       versaoRecomendada: ctrl.versao_recomendada || '',
       loja: prefs && (prefs.nome || (prefs.estabelecimento && prefs.estabelecimento.nome)) || '',
+      viasLoja: escolhaVias(),
       fila: fila.length,
       ultimoErro,
     };
@@ -91,6 +92,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       // o endpoint pode devolver a loja direto ou dentro de uma chave
       prefs = j && (j.estabelecimento || j.loja || j) || {};
       prefsTs = Date.now();
+      try { store.setViasLoja(prefs.impressao_vias); } catch (e) {}
     } catch (e) {
       if (!prefs) prefs = {}; // segue com padrões
       onLog('aviso', 'Não consegui ler as preferências da loja agora, usando o último ajuste conhecido.');
@@ -98,11 +100,15 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     return prefs;
   }
 
+  // Quais vias imprimir: desde a 1.1.0 so o painel decide (aba Impressao), igual a
+  // impressao pelo navegador. Se o servidor nao respondeu ainda, usa a ultima
+  // escolha conhecida da loja, guardada no disco.
   function escolhaVias() {
-    const cfg = store.getConfig();
-    if (cfg.vias && cfg.vias !== 'auto') return cfg.vias;
-    const v = prefs && (prefs.impressao_vias || (prefs.automacoes && prefs.automacoes.impressao_vias));
-    return v || 'cozinha';
+    const ok = v => (v === 'cozinha' || v === 'motoboy' || v === 'ambas') ? v : '';
+    const v = prefs && ok(prefs.impressao_vias || (prefs.automacoes && prefs.automacoes.impressao_vias));
+    if (v) return v;
+    try { const g = ok(store.getEstado().viasLoja); if (g) return g; } catch (e) {}
+    return 'cozinha';
   }
 
   // Coloca um pedido na fila de impressão (sem duplicar).
@@ -261,7 +267,8 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     try {
       // tenta atualizar as preferências para o teste sair com a cara da loja
       try { const token = store.getToken(); if (token) await pegarPrefs(cfg.base, token, true); } catch (e) {}
-      const escolha = cfg.vias && cfg.vias !== 'auto' ? cfg.vias : 'ambas';
+      // O teste sempre mostra as duas vias, para a loja conferir o papel inteiro.
+      const escolha = 'ambas';
       const html = render.montarDocumento(render.PEDIDO_EXEMPLO, prefs || {}, prefs || {}, escolha);
       onLog('info', 'Imprimindo cupom de teste...', { tipo: 'teste', impressora: cfg.impressora });
       await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);

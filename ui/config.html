@@ -68,6 +68,9 @@
       <button class="b-soft" id="btnAtualizarImp" style="flex:0 0 auto">Atualizar</button>
     </div>
 
+    <!-- Desde a 1.1.0 as vias sao escolhidas so no painel (aba Impressao). Aqui so mostra. -->
+    <p class="sub" id="viasInfo" style="margin:10px 0 4px">O que imprimir é escolhido no painel do UaiPedidos, na aba Impressão.</p>
+
     <div class="check"><input type="checkbox" id="som"> <span>Tocar aviso sonoro ao chegar pedido</span></div>
     <div class="check"><input type="checkbox" id="autostart"> <span>Iniciar junto com o computador</span></div>
 
@@ -86,14 +89,6 @@
       <span id="advSeta">▾</span>
     </button>
     <div id="avancado" style="display:none;margin-top:14px">
-      <label for="vias">O que imprimir</label>
-      <select id="vias">
-        <option value="auto">Usar a configuração da loja</option>
-        <option value="cozinha">Só a via da cozinha</option>
-        <option value="motoboy">Só a via de entrega</option>
-        <option value="ambas">As duas vias</option>
-      </select>
-
       <div class="row">
         <div>
           <label for="intervalo">Verificar a cada (segundos)</label>

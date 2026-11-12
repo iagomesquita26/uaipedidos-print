@@ -38,9 +38,11 @@ const UI = path.join(__dirname, '..', 'ui');
 const URL_INSTALACAO = 'https://uaipedidos.com.br/uaipedidos-print-como-instalar';
 let ultimaVersaoAvisada = ''; // evita repetir a notificacao da mesma versao
 
-// Uma instância só (abrir de novo apenas mostra a janela).
-if (!app.requestSingleInstanceLock()) { app.quit(); }
-app.on('second-instance', () => mostrarJanela());
+// Uma instância só (abrir de novo apenas mostra a janela). A segunda cópia sai na
+// hora, sem criar ícone, sem ler a configuração e sem mandar sinal de vida.
+const instanciaPrincipal = app.requestSingleInstanceLock();
+if (!instanciaPrincipal) { app.quit(); }
+else app.on('second-instance', () => mostrarJanela());
 
 function registrarLog(nivel, msg, extra) {
   const item = { nivel, msg, ts: Date.now() };
@@ -80,7 +82,9 @@ function estadoAtual() {
   const ctrl = store.getControle();
   return {
     impressora: cfg.impressora,
-    vias: cfg.vias,
+    // 1.1.0: as vias sempre seguem o painel; vias_loja e o que a loja escolheu lá.
+    vias: 'auto',
+    vias_loja: s.viasLoja || '',
     intervalo: cfg.intervalo,
     copias: cfg.copiasCozinha,
     // "pausado" reflete a pausa local do lojista OU a pausa/bloqueio remoto
@@ -369,7 +373,8 @@ function configurarIpc() {
 
   ipcMain.handle('config:salvar', (_e, parcial) => {
     const permitido = {};
-    for (const k of ['base', 'impressora', 'vias', 'intervalo', 'copiasCozinha', 'som', 'autostart']) {
+    // 'vias' saiu de propósito na 1.1.0: quem decide as vias é o painel da loja.
+    for (const k of ['base', 'impressora', 'intervalo', 'copiasCozinha', 'som', 'autostart']) {
       if (parcial && parcial[k] !== undefined) permitido[k] = parcial[k];
     }
     const c = store.setConfig(permitido);
@@ -417,6 +422,7 @@ function configurarIpc() {
 }
 
 app.whenReady().then(() => {
+  if (!instanciaPrincipal) return;
   store = require('./store');
   printer = require('./printer');
   const { criarPoller } = require('./poller');
@@ -483,6 +489,7 @@ app.whenReady().then(() => {
 app.on('window-all-closed', (e) => { /* mantém vivo na bandeja */ });
 app.on('before-quit', () => {
   app.isQuitting = true;
+  if (!instanciaPrincipal) return;
   try { if (telemetria) telemetria.registrar('info', 'Programa encerrado.', { tipo: 'parada' }); } catch (e) {}
   if (poller) poller.parar();
 });

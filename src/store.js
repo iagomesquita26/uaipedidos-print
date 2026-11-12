@@ -6,6 +6,7 @@
  * operacional (safeStorage) quando disponível, para não ficarem em texto puro.
  */
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { app, safeStorage } = require('electron');
 
@@ -23,7 +24,7 @@ const CFG_PADRAO = {
   token: '',          // token cifrado (base64) ou vazio
   tokenExpira: 0,     // epoch em ms
   impressora: '',     // deviceName escolhido (vazio = padrão do sistema)
-  vias: 'auto',       // 'auto' (usa a config da loja) | 'cozinha' | 'motoboy' | 'ambas'
+  vias: 'auto',       // sempre 'auto' desde a 1.1.0: quem decide as vias e o painel da loja
   intervalo: 5,       // segundos entre verificações
   copiasCozinha: 1,   // quantas vias iguais imprimir
   som: true,          // aviso sonoro ao chegar pedido
@@ -35,17 +36,34 @@ const CFG_PADRAO = {
 const ESTADO_PADRAO = {
   lastSeenId: 0,      // maior id já visto (para não avisar pedidos antigos)
   processados: [],    // ids que já tentamos imprimir (evita repetir a cada volta)
+  viasLoja: '',       // ultima escolha de vias lida do painel (reserva se o servidor nao responder)
 };
 
-function lerJson(arq, padrao) {
-  try {
-    if (!fs.existsSync(arq)) return { ...padrao };
-    const j = JSON.parse(fs.readFileSync(arq, 'utf8'));
-    return { ...padrao, ...j };
-  } catch (e) { return { ...padrao }; }
+function lerUm(arq) {
+  if (!fs.existsSync(arq)) return null;
+  const j = JSON.parse(fs.readFileSync(arq, 'utf8'));
+  return (j && typeof j === 'object' && !Array.isArray(j)) ? j : null;
 }
+function lerJson(arq, padrao) {
+  // Se o arquivo principal estiver estragado (queda de energia no meio da gravacao
+  // em versoes antigas), tenta a copia temporaria da ultima gravacao.
+  for (const a of [arq, arq + '.tmp']) {
+    try { const j = lerUm(a); if (j) return { ...padrao, ...j }; } catch (e) {}
+  }
+  return { ...padrao };
+}
+// Gravacao segura: escreve numa copia temporaria e so depois troca pelo arquivo
+// de verdade. Assim uma queda de energia no meio nao deixa o arquivo pela metade
+// (o que antes fazia o programa "esquecer" a loja e o identificador do PC).
 function salvarJson(arq, obj) {
-  try { fs.writeFileSync(arq, JSON.stringify(obj, null, 2), 'utf8'); } catch (e) {}
+  const txt = JSON.stringify(obj, null, 2);
+  try {
+    fs.writeFileSync(arq + '.tmp', txt, 'utf8');
+    fs.renameSync(arq + '.tmp', arq);
+  } catch (e) {
+    // antivirus segurando o arquivo, por exemplo: grava direto, como antes
+    try { fs.writeFileSync(arq, txt, 'utf8'); } catch (e2) {}
+  }
 }
 
 // ------- cifragem de segredos -------
@@ -74,6 +92,10 @@ function decifrar(valor) {
 // ------- API pública do módulo -------
 let _cfg = lerJson(ARQ_CFG, CFG_PADRAO);
 let _estado = lerJson(ARQ_ESTADO, ESTADO_PADRAO);
+if (!Array.isArray(_estado.processados)) _estado.processados = [];
+// 1.1.0: a escolha "O que imprimir" saiu do programa. Quem tinha escolhido uma via
+// fixa neste PC passa a seguir o painel da loja (aba Impressao).
+if (_cfg.vias !== 'auto') { _cfg.vias = 'auto'; salvarJson(ARQ_CFG, _cfg); }
 
 // Controle remoto (vem na resposta do print_log). So em memoria de proposito: ao
 // reiniciar, volta ao normal ate o servidor confirmar de novo o bloqueio/pausa.
@@ -131,15 +153,58 @@ function marcarProcessado(id) {
   }
 }
 function pastaDados() { return DIR; }
+function setViasLoja(v) {
+  if (!['cozinha', 'motoboy', 'ambas'].includes(v) || _estado.viasLoja === v) return;
+  _estado.viasLoja = v;
+  salvarJson(ARQ_ESTADO, _estado);
+}
 
 // ------- identificador fixo deste computador (para o servidor separar as maquinas) -------
+// Alem do config.json (pasta do usuario), o id fica numa pasta comum do computador.
+// Se a pasta do usuario for apagada (reinstalacao, outro usuario do Windows), o
+// programa reaproveita o mesmo id e o painel nao mostra o PC duplicado.
+// Windows: C:\ProgramData\UaiPedidos\agente.json  Mac: /Users/Shared/UaiPedidos/agente.json
+function arqAgenteComum() {
+  try {
+    if (process.platform === 'win32') return path.join(process.env.ProgramData || 'C:\\ProgramData', 'UaiPedidos', 'agente.json');
+    if (process.platform === 'darwin') return '/Users/Shared/UaiPedidos/agente.json';
+  } catch (e) {}
+  return '';
+}
+const idValido = v => typeof v === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(v);
+const nomeMaquina = () => { try { return os.hostname(); } catch (e) { return ''; } };
+function lerAgenteComum() {
+  try { const a = arqAgenteComum(); const j = a ? lerUm(a) : null; return (j && idValido(j.agente_id)) ? j : null; } catch (e) { return null; }
+}
+function gravarAgenteComum(id) {
+  try {
+    const a = arqAgenteComum();
+    if (!a) return;
+    fs.mkdirSync(path.dirname(a), { recursive: true });
+    salvarJson(a, { agente_id: id, maquina: nomeMaquina(), criado_em: new Date().toISOString() });
+  } catch (e) {}
+}
+let _agenteConferido = false;
 function getAgenteId() {
-  if (_cfg.agente_id) return _cfg.agente_id;
+  if (idValido(_cfg.agente_id)) {
+    // O id local sempre vale. So escreve na pasta comum se ela ainda nao tiver um
+    // (nunca sobrescreve o id de outro usuario do mesmo PC).
+    if (!_agenteConferido) { _agenteConferido = true; if (!lerAgenteComum()) gravarAgenteComum(_cfg.agente_id); }
+    return _cfg.agente_id;
+  }
+  _agenteConferido = true;
   let id = '';
-  try { const { randomUUID } = require('crypto'); id = randomUUID(); } catch (e) {}
-  if (!id) id = 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  const comum = lerAgenteComum();
+  // Reaproveita o id da pasta comum so se for deste mesmo computador (a pasta pode
+  // ter vindo copiada de outra maquina, por exemplo numa imagem do Windows).
+  if (comum && comum.maquina && comum.maquina === nomeMaquina()) id = comum.agente_id;
+  if (!id) {
+    try { const { randomUUID } = require('crypto'); id = randomUUID(); } catch (e) {}
+    if (!id) id = 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
+  }
   _cfg.agente_id = id;
   salvarJson(ARQ_CFG, _cfg);
+  if (!comum) gravarAgenteComum(id);
   return id;
 }
 
@@ -199,7 +264,7 @@ function cmdResultRemover(ids) {
 
 module.exports = {
   getConfig, setConfig, setSenha, getSenha, setToken, getToken, limparToken,
-  getEstado, setLastSeen, jaProcessado, marcarProcessado, pastaDados,
+  getEstado, setLastSeen, jaProcessado, marcarProcessado, pastaDados, setViasLoja,
   getAgenteId, teleAdicionar, teleLista, teleRemover, teleTamanho,
   setControle, getControle,
   cmdJaFeito, cmdMarcarFeito, cmdResultAdicionar, cmdResultLista, cmdResultRemover,

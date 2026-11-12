@@ -18,18 +18,22 @@ const store = require('./store');
 let ctx = {};
 function configurar(deps) { ctx = deps || {}; }
 
-// Trava para nao processar dois lotes ao mesmo tempo (dois heartbeats cruzados).
-// A guarda por id (cmdJaFeito/cmdMarcarFeito) ja evita repetir o mesmo comando;
-// esta flag serializa os lotes para nao haver efeitos colaterais concorrentes.
+// Os comandos rodam um por vez. Se chegar um lote novo enquanto outro ainda roda
+// (dois heartbeats cruzados), ele entra na fila e roda em seguida. Antes o lote
+// novo era descartado, mas o servidor ja o tinha marcado como entregue, entao o
+// comando se perdia. A guarda por id (cmdJaFeito/cmdMarcarFeito) evita repetir.
 let processando = false;
+const filaCmd = [];
 
 // Executa a lista de comandos recebida, um por vez, e guarda os resultados.
 async function processar(lista) {
   if (!Array.isArray(lista) || !lista.length) return;
-  if (processando) return;
+  filaCmd.push(...lista);
+  if (processando) return; // o lote em andamento pega estes no fim
   processando = true;
   try {
-    for (const cmd of lista) {
+    while (filaCmd.length) {
+      const cmd = filaCmd.shift();
       const id = Number(cmd && cmd.id);
       if (!id || store.cmdJaFeito(id)) continue; // ja executado: nao repete
       store.cmdMarcarFeito(id);
@@ -85,7 +89,8 @@ async function executar(cmd) {
     case 'aplicar_config': {
       const permitido = {};
       if (p.impressora !== undefined) permitido.impressora = String(p.impressora);
-      if (p.vias !== undefined)       permitido.vias = String(p.vias);
+      // Desde a 1.1.0 as vias vem so do painel: um pedido de vias vira "seguir a loja".
+      if (p.vias !== undefined)       permitido.vias = 'auto';
       if (p.intervalo !== undefined)  permitido.intervalo = Math.max(5, Math.min(120, Number(p.intervalo) || 5));
       if (p.copias !== undefined)     permitido.copiasCozinha = Math.max(1, Math.min(5, Number(p.copias) || 1));
       if (p.som !== undefined)        permitido.som = !!p.som;

@@ -38,6 +38,11 @@ function aplicarStatus(st) {
   else if (st.precisaLogin) { pill.className = 'pill off'; pill.textContent = 'Senha mudou, entre de novo'; }
   else { pill.className = 'pill off'; pill.textContent = 'Desconectado'; }
   if (st.loja) $('lojaNome').textContent = st.loja;
+  // Vias: so leitura. Quem escolhe e o painel da loja (aba Impressao).
+  const VIAS_TXT = { cozinha: 'só a via da cozinha', motoboy: 'só a via de entrega', ambas: 'as duas vias (cozinha e entrega)' };
+  if ($('viasInfo') && VIAS_TXT[st.viasLoja]) {
+    $('viasInfo').textContent = 'Imprimindo ' + VIAS_TXT[st.viasLoja] + '. Para mudar, use o painel do UaiPedidos, na aba Impressão.';
+  }
   $('btnPausa').textContent = st.pausado ? 'Retomar' : 'Pausar';
   // Sob bloqueio ou pausa remota do painel, o lojista nao controla a pausa por aqui
   // (evita a confusao de "pausar" algo que o painel ja parou).
@@ -93,7 +98,6 @@ async function carregar() {
   const c = await window.uai.getConfig();
   $('base').value = c.base || 'https://uaipedidos.com.br';
   $('email').value = c.email || '';
-  $('vias').value = c.vias || 'auto';
   $('copias').value = c.copiasCozinha || 1;
   $('intervalo').value = c.intervalo || 5;
   $('som').checked = c.som !== false;
@@ -123,7 +127,6 @@ $('btnSair').addEventListener('click', async () => {
 $('btnSalvar').addEventListener('click', async () => {
   await window.uai.salvarConfig({
     impressora: $('impressora').value,
-    vias: $('vias').value,
     copiasCozinha: Math.max(1, Math.min(5, Number($('copias').value) || 1)),
     intervalo: Math.max(5, Math.min(120, Number($('intervalo').value) || 5)),
     som: $('som').checked,

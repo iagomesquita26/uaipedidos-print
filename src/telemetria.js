@@ -19,7 +19,10 @@ const api = require('./api');
 const store = require('./store');
 
 const FLUSH_MS = 30 * 1000;        // tenta enviar a cada 30s
-const HEARTBEAT_MS = 30 * 1000;     // sinal de vida a cada 30s (pega comandos rapido)
+// Sinal de vida: um pouco menor que o FLUSH_MS de proposito. Como a conta e feita
+// a partir do fim do envio anterior, com 30s/30s metade das voltas caia "cedo
+// demais" e o sinal so saia de 60 em 60s. Com 25s ele sai em toda volta (~30s).
+const HEARTBEAT_MS = 25 * 1000;
 const LOTE_MAX = 200;               // eventos por envio
 
 let timer = null;
@@ -39,6 +42,8 @@ function iniciar(opcoes = {}) {
   if (typeof opcoes.onComandos === 'function') onComandos = opcoes.onComandos;
   parar();
   timer = setInterval(flush, FLUSH_MS);
+  // Primeiro sinal logo ao abrir: o painel ve o computador online sem esperar 30s.
+  setTimeout(() => { flush(true); }, 3000);
 }
 function parar() { if (timer) { clearInterval(timer); timer = null; } }
 
