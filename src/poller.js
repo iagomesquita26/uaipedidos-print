@@ -41,7 +41,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   let alertaLoja = null;            // base|email da loja dos avisos (trocou = recomeca)
   let alertaRelembrar = false;      // proxima "primeira volta" repete o lembrete de pendentes
   let alertaParadoDesde = 0;        // avisos parados por falta de acesso desde (epoch ms)
-  let geracao = 0;                  // muda no logout: volta em andamento nao avisa depois dele
+  let geracao = 0;                  // muda no logout e na troca de loja: volta antiga nao avisa depois
   const PARADO_RECOMECA_MS = 10 * 60 * 1000; // parado mais que isso: recomeca so memorizando
 
   // Espera crescente quando o login falha (senha trocada/expirada). Em vez de
@@ -220,6 +220,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   async function tick() {
     if (rodando) return;
     rodando = true;
+    const g = geracao;
     try {
       const cfg = store.getConfig();
       const ctrl = store.getControle();
@@ -236,8 +237,9 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
             await pegarPrefs(cfg.base, token, false);
             const l = await api.listaAbertos(cfg.base, token, 2);
             loginOk();
-            await verificarAlertas(cfg, token, (l && l.pedidos) || []);
+            await verificarAlertas(cfg, token, (l && l.pedidos) || [], g);
           } catch (e) {
+            if (g !== geracao) return; // volta antiga: logout ou outra loja no meio
             if (e && e.status === 401) { falhaDeLogin(); avisosParados(); }
             else if (!alertaParadoDesde) alertaParadoDesde = Date.now(); // sem internet: so marca
           }
@@ -250,6 +252,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
       await pegarPrefs(cfg.base, token, false);
 
       const lista = await api.listaAbertos(cfg.base, token, 2);
+      if (g !== geracao) return; // saiu ou trocou de loja enquanto esperava
       conectado = true; ultimoErro = '';
       loginOk(); // login e lista ok: zera a espera
       const pedidos = (lista && lista.pedidos) || [];
@@ -266,6 +269,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
         try {
           const d = await api.detalhe(cfg.base, token, id);
           if (!d || !d.pedido) continue;
+          if (g !== geracao) return;
           if (d.pedido.impresso_em) { store.marcarProcessado(id); continue; }
           enfileirar({ pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] });
         } catch (e) {
@@ -275,18 +279,21 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
       }
       // Avisos depois da impressao, para nunca atrasar o cupom. Erro aqui nao
       // derruba a volta.
-      try { await verificarAlertas(cfg, token, pedidos); } catch (e) {
+      try { await verificarAlertas(cfg, token, pedidos, g); } catch (e) {
         if (e && e.status === 401) throw e;
       }
       emitirStatus();
     } catch (e) {
+      if (g !== geracao) return; // volta antiga: logout ou outra loja no meio
       conectado = false;
       ultimoErro = e.message || String(e);
       if (e.status === 401) { falhaDeLogin(); avisosParados(); }
-      // Sem internet: o alarme segue (para sozinho em 5 min sem noticia), so marca o
-      // inicio para, se demorar, recomecar memorizando em vez de despejar tudo.
-      else if (!alertaParadoDesde) alertaParadoDesde = Date.now();
-      else onLog('erro', ultimoErro);
+      else {
+        // Sem internet: o alarme segue (para sozinho em 5 min sem noticia), so marca o
+        // inicio para, se demorar, recomecar memorizando em vez de despejar tudo.
+        if (!alertaParadoDesde) alertaParadoDesde = Date.now();
+        onLog('erro', ultimoErro);
+      }
       emitirStatus();
     } finally {
       rodando = false;
@@ -303,8 +310,8 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
 
   function avisar(ev) { try { onAlertas(Object.assign({ cfg: configAlertas() }, ev)); } catch (e) {} }
 
-  async function verificarAlertas(cfg, token, pedidos) {
-    const g = geracao;
+  async function verificarAlertas(cfg, token, pedidos, g) {
+    if (g !== geracao) return;
     const al = alertas.normalizar(configAlertas());
     // cfg.som: chave "Avisos de pedido novo neste computador" (tela do programa).
     if (cfg.som === false || (!al.aviso && !al.alarme)) { alertaUltimoId = -1; avisar({ ativo: false }); return; }
@@ -342,8 +349,8 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     // Avanca pelo maior id da propria lista (lida ANTES do ping): pedido que entrou
     // entre a lista e o ping fica para a proxima volta, em vez de sumir.
     const maxLista = pedidos.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
-    alertaUltimoId = Math.max(alertaUltimoId, maxLista);
     if (g !== geracao) return;
+    alertaUltimoId = Math.max(alertaUltimoId, maxLista);
     novos.sort((a, b) => Number(a.id) - Number(b.id));
     avisar({ ativo: true, novos, pendentes });
   }
@@ -357,7 +364,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     const c0 = store.getConfig();
     const loja = String(c0.base || '') + '|' + String(c0.email || '').toLowerCase();
     if (loja !== alertaLoja) {
-      if (alertaLoja !== null) { prefs = null; alertaRelembrar = true; }
+      if (alertaLoja !== null) { prefs = null; alertaRelembrar = true; geracao++; avisar({ ativo: false }); }
       alertaLoja = loja; alertaUltimoId = -1; alertaParadoDesde = 0;
     }
     backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // reconexao manual: tenta ja
