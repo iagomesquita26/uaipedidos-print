@@ -41,6 +41,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   let alertaLoja = null;            // base|email da loja dos avisos (trocou = recomeca)
   let alertaRelembrar = false;      // proxima "primeira volta" repete o lembrete de pendentes
   let alertaParadoDesde = 0;        // avisos parados por falta de acesso desde (epoch ms)
+  let geracao = 0;                  // muda no logout: volta em andamento nao avisa depois dele
   const PARADO_RECOMECA_MS = 10 * 60 * 1000; // parado mais que isso: recomeca so memorizando
 
   // Espera crescente quando o login falha (senha trocada/expirada). Em vez de
@@ -105,7 +106,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   // para saber se o pedido foi aceito. Parado por muito tempo, recomeca do zero.
   function avisosParados() {
     if (!alertaParadoDesde) alertaParadoDesde = Date.now();
-    avisar({ ativo: false });
+    avisar({ ativo: false, suspender: true }); // o alarme volta se o pedido ainda esperar
   }
 
   // Garante um token válido. Faz login com email/senha guardados se preciso.
@@ -232,22 +233,25 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
         else {
           try {
             const token = await garantirToken();
-            loginOk();
             await pegarPrefs(cfg.base, token, false);
             const l = await api.listaAbertos(cfg.base, token, 2);
+            loginOk();
             await verificarAlertas(cfg, token, (l && l.pedidos) || []);
-          } catch (e) { if (e && e.status === 401) { falhaDeLogin(); avisosParados(); } }
+          } catch (e) {
+            if (e && e.status === 401) { falhaDeLogin(); avisosParados(); }
+            else if (!alertaParadoDesde) alertaParadoDesde = Date.now(); // sem internet: so marca
+          }
         }
         emitirStatus(); return;
       }
       // Espera crescente apos falha de login: nao tenta de novo antes da hora.
       if (proximaAuthTs && Date.now() < proximaAuthTs) { conectado = false; avisosParados(); emitirStatus(); return; }
       const token = await garantirToken();
-      conectado = true; ultimoErro = '';
-      loginOk(); // login ok: zera a espera
       await pegarPrefs(cfg.base, token, false);
 
       const lista = await api.listaAbertos(cfg.base, token, 2);
+      conectado = true; ultimoErro = '';
+      loginOk(); // login e lista ok: zera a espera
       const pedidos = (lista && lista.pedidos) || [];
       const maxId = pedidos.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
 
@@ -279,6 +283,9 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
       conectado = false;
       ultimoErro = e.message || String(e);
       if (e.status === 401) { falhaDeLogin(); avisosParados(); }
+      // Sem internet: o alarme segue (para sozinho em 5 min sem noticia), so marca o
+      // inicio para, se demorar, recomecar memorizando em vez de despejar tudo.
+      else if (!alertaParadoDesde) alertaParadoDesde = Date.now();
       else onLog('erro', ultimoErro);
       emitirStatus();
     } finally {
@@ -297,10 +304,12 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   function avisar(ev) { try { onAlertas(Object.assign({ cfg: configAlertas() }, ev)); } catch (e) {} }
 
   async function verificarAlertas(cfg, token, pedidos) {
+    const g = geracao;
     const al = alertas.normalizar(configAlertas());
     // cfg.som: chave "Avisos de pedido novo neste computador" (tela do programa).
     if (cfg.som === false || (!al.aviso && !al.alarme)) { alertaUltimoId = -1; avisar({ ativo: false }); return; }
     const pg = await api.ping(cfg.base, token);
+    if (g !== geracao) return; // desconectou enquanto esperava
     const pendentes = ((pg && pg.pendentes) || []).map(Number).filter(Boolean);
     const despertar = ((pg && pg.despertar) || []).map(Number).filter(Boolean);
     const maxServ = Number(pg && pg.max_id) || 0;
@@ -334,6 +343,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     // entre a lista e o ping fica para a proxima volta, em vez de sumir.
     const maxLista = pedidos.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
     alertaUltimoId = Math.max(alertaUltimoId, maxLista);
+    if (g !== geracao) return;
     novos.sort((a, b) => Number(a.id) - Number(b.id));
     avisar({ ativo: true, novos, pendentes });
   }
@@ -361,6 +371,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   // mais a loja antiga).
   function desligar() {
     parar();
+    geracao++;
     avisar({ ativo: false });
     prefs = null; prefsTs = 0;
     alertaLoja = null; alertaUltimoId = -1; alertaParadoDesde = 0; alertaRelembrar = true;

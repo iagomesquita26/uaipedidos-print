@@ -47,6 +47,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
   const vivas = new Set();
   let cfgAtual = Object.assign({}, PADRAO);
   let tocando = new Map();    // id -> numero, pedidos que fazem o alarme tocar
+  const suspensos = new Map(); // tocavam quando o acesso caiu; voltam se ainda esperarem aceite
   const silenciados = new Set(); // ids que alguem ja disse "Vi o pedido"
   let timer = null;
   let janela = null;
@@ -102,7 +103,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
     // Acima de tudo, inclusive de programa em tela cheia (no Mac, em qualquer mesa).
     try { janela.setAlwaysOnTop(true, 'screen-saver'); } catch (e) {}
     if (process.platform === 'darwin') {
-      try { janela.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch (e) {}
+      try { janela.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch (e) {}
     }
     janela.loadFile(path.join(UI, 'alarme.html'));
     // Se a pagina do alarme travar, descarta a janela; o proximo toque cria outra.
@@ -142,7 +143,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
     if (chegouNovo && timer) { clearInterval(timer); timer = null; }
     if (!timer) timer = setInterval(() => {
       if (!tocando.size) return pararAlarme();
-      if (Date.now() - ultimaNoticia > SEM_NOTICIA_MS) { tocando.clear(); return pararAlarme(); }
+      if (Date.now() - ultimaNoticia > SEM_NOTICIA_MS) { suspender(); return pararAlarme(); }
       if (!janela || janela.isDestroyed()) { criarJanela(); return; }
       tocarUmaVez();
     }, REPETIR_MS);
@@ -164,6 +165,12 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
     if (!tocando.size) pararAlarme(); else enviarTela();
   }
 
+  function suspender() {
+    for (const [id, n] of tocando) suspensos.set(id, n);
+    tocando.clear();
+    if (suspensos.size > 200) suspensos.clear();
+  }
+
   function primeiroTocando() { const it = tocando.keys().next(); return it.done ? 0 : it.value; }
 
   // ---------- chamado pelo poller a cada volta ----------
@@ -172,9 +179,17 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
     const e = ev || {};
     ultimaNoticia = Date.now();
     cfgAtual = normalizar(e.cfg);
-    if (!e.ativo) { tocando.clear(); pararAlarme(); return; }
+    if (!e.ativo) {
+      if (e.suspender) suspender(); else { suspensos.clear(); tocando.clear(); }
+      pararAlarme(); return;
+    }
     const pendentes = new Set((e.pendentes || []).map(Number));
     let chegouNovo = false;
+    // Voltou o acesso: quem tocava e ainda espera aceite volta a tocar.
+    if (suspensos.size) {
+      if (cfgAtual.alarme) for (const [id, n] of suspensos) if (pendentes.has(id) && !silenciados.has(id) && !tocando.has(id)) { tocando.set(id, n); chegouNovo = true; }
+      suspensos.clear();
+    }
 
     // Pedido aceito/recusado em qualquer lugar sai do alarme.
     for (const id of Array.from(tocando.keys())) if (!pendentes.has(id)) tocando.delete(id);
