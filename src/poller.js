@@ -38,6 +38,10 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   // pela propria loja no painel. O alarme vale enquanto o pedido espera aceite.
   let alertaUltimoId = -1;          // -1 = ainda nao leu (primeira volta so memoriza)
   const despertados = new Set();    // agendados que ja avisaram
+  let alertaLoja = null;            // base|email da loja dos avisos (trocou = recomeca)
+  let alertaRelembrar = false;      // proxima "primeira volta" repete o lembrete de pendentes
+  let alertaParadoDesde = 0;        // avisos parados por falta de acesso desde (epoch ms)
+  const PARADO_RECOMECA_MS = 10 * 60 * 1000; // parado mais que isso: recomeca so memorizando
 
   // Espera crescente quando o login falha (senha trocada/expirada). Em vez de
   // martelar o servidor a cada 5s de forma muda, espera 15s, 30s, 60s... ate 5 min,
@@ -82,6 +86,27 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     };
   }
   function emitirStatus() { onStatus(status()); }
+
+  // Senha trocada ou acesso expirado: limpa o token e espera cada vez mais antes de
+  // tentar de novo (15s, 30s, 60s, 120s... ate 5 min). Avisa uma vez.
+  function falhaDeLogin() {
+    store.limparToken();
+    backoffAuth = Math.min(backoffAuth + 1, 5);
+    const esperaMs = Math.min(15000 * Math.pow(2, backoffAuth - 1), 5 * 60 * 1000);
+    proximaAuthTs = Date.now() + esperaMs;
+    if (!avisouSenha) {
+      avisouSenha = true;
+      onLog('erro', 'Sua senha mudou ou o acesso expirou. Abra as configurações e entre de novo com e-mail e senha. (nova tentativa em ' + Math.round(esperaMs / 1000) + 's)', { tipo: 'conexao', nivel: 'erro' });
+    }
+  }
+  function loginOk() { backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; }
+
+  // Sem acesso a loja (bloqueio, senha, logout): o alarme para, porque nao da mais
+  // para saber se o pedido foi aceito. Parado por muito tempo, recomeca do zero.
+  function avisosParados() {
+    if (!alertaParadoDesde) alertaParadoDesde = Date.now();
+    avisar({ ativo: false });
+  }
 
   // Garante um token válido. Faz login com email/senha guardados se preciso.
   async function garantirToken() {
@@ -203,21 +228,23 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
         conectado = false; ultimoErro = ''; limparFila();
         // Impressao pausada nao cala o aviso de pedido novo (a loja ainda precisa
         // aceitar). So o bloqueio do suporte desliga tudo neste PC.
-        if (ctrl.bloqueado || (proximaAuthTs && Date.now() < proximaAuthTs) || !store.getToken()) avisar({ ativo: false });
+        if (ctrl.bloqueado || (proximaAuthTs && Date.now() < proximaAuthTs)) avisosParados();
         else {
           try {
-            const token = store.getToken();
+            const token = await garantirToken();
+            loginOk();
+            await pegarPrefs(cfg.base, token, false);
             const l = await api.listaAbertos(cfg.base, token, 2);
             await verificarAlertas(cfg, token, (l && l.pedidos) || []);
-          } catch (e) { if (e && e.status === 401) store.limparToken(); }
+          } catch (e) { if (e && e.status === 401) { falhaDeLogin(); avisosParados(); } }
         }
         emitirStatus(); return;
       }
       // Espera crescente apos falha de login: nao tenta de novo antes da hora.
-      if (proximaAuthTs && Date.now() < proximaAuthTs) { conectado = false; emitirStatus(); return; }
+      if (proximaAuthTs && Date.now() < proximaAuthTs) { conectado = false; avisosParados(); emitirStatus(); return; }
       const token = await garantirToken();
       conectado = true; ultimoErro = '';
-      backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // login ok: zera a espera
+      loginOk(); // login ok: zera a espera
       await pegarPrefs(cfg.base, token, false);
 
       const lista = await api.listaAbertos(cfg.base, token, 2);
@@ -251,18 +278,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     } catch (e) {
       conectado = false;
       ultimoErro = e.message || String(e);
-      if (e.status === 401) {
-        // Senha trocada ou acesso expirado: limpa o token e espera cada vez mais
-        // antes de tentar de novo (15s, 30s, 60s, 120s... ate 5 min).
-        store.limparToken();
-        backoffAuth = Math.min(backoffAuth + 1, 5);
-        const esperaMs = Math.min(15000 * Math.pow(2, backoffAuth - 1), 5 * 60 * 1000);
-        proximaAuthTs = Date.now() + esperaMs;
-        if (!avisouSenha) {
-          avisouSenha = true;
-          onLog('erro', 'Sua senha mudou ou o acesso expirou. Abra as configurações e entre de novo com e-mail e senha. (nova tentativa em ' + Math.round(esperaMs / 1000) + 's)', { tipo: 'conexao', nivel: 'erro' });
-        }
-      }
+      if (e.status === 401) { falhaDeLogin(); avisosParados(); }
       else onLog('erro', ultimoErro);
       emitirStatus();
     } finally {
@@ -288,10 +304,15 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     const pendentes = ((pg && pg.pendentes) || []).map(Number).filter(Boolean);
     const despertar = ((pg && pg.despertar) || []).map(Number).filter(Boolean);
     const maxServ = Number(pg && pg.max_id) || 0;
+    // Ficou muito tempo sem acesso: nao despeja tudo o que chegou nesse meio tempo,
+    // recomeca memorizando e repete o lembrete dos que esperam aceite.
+    if (alertaParadoDesde && Date.now() - alertaParadoDesde > PARADO_RECOMECA_MS) { alertaUltimoId = -1; alertaRelembrar = true; }
+    alertaParadoDesde = 0;
     if (alertaUltimoId < 0) {
       alertaUltimoId = maxServ;
       despertar.forEach(id => despertados.add(id));
-      avisar({ ativo: true, inicio: true, pendentes });
+      avisar({ ativo: true, inicio: true, relembrar: alertaRelembrar, pendentes });
+      alertaRelembrar = false;
       return;
     }
     const novos = pedidos.filter(p => {
@@ -304,10 +325,15 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
       despertados.add(id);
       let p = pedidos.find(x => Number(x.id) === id);
       if (!p) { try { const d = await api.detalhe(cfg.base, token, id); p = d && d.pedido; } catch (e) { p = null; } }
+      // Igual ao painel: so avisa o agendado que ainda espera aceite.
+      if (p && p.status && p.status !== 'criado') continue;
       novos.push(p || { id, numero: id });
     }
     if (despertados.size > 500) { const a = Array.from(despertados).slice(-200); despertados.clear(); a.forEach(i => despertados.add(i)); }
-    alertaUltimoId = Math.max(alertaUltimoId, maxServ);
+    // Avanca pelo maior id da propria lista (lida ANTES do ping): pedido que entrou
+    // entre a lista e o ping fica para a proxima volta, em vez de sumir.
+    const maxLista = pedidos.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
+    alertaUltimoId = Math.max(alertaUltimoId, maxLista);
     novos.sort((a, b) => Number(a.id) - Number(b.id));
     avisar({ ativo: true, novos, pendentes });
   }
@@ -316,7 +342,14 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     parar();
     primeiraVolta = true;
     prefsTs = 0; // reconexao/config nova: busca as preferencias da loja de novo
-    alertaUltimoId = -1; // e os avisos recomecam so memorizando
+    // Avisos so recomecam do zero se mudou a loja. Retomar ou salvar a configuracao
+    // nao pode engolir o pedido que acabou de chegar.
+    const c0 = store.getConfig();
+    const loja = String(c0.base || '') + '|' + String(c0.email || '').toLowerCase();
+    if (loja !== alertaLoja) {
+      if (alertaLoja !== null) { prefs = null; alertaRelembrar = true; }
+      alertaLoja = loja; alertaUltimoId = -1; alertaParadoDesde = 0;
+    }
     backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // reconexao manual: tenta ja
     const seg = Math.max(5, Number(store.getConfig().intervalo) || 12);
     onLog('info', 'Monitorando pedidos a cada ' + seg + ' segundos.');
@@ -324,6 +357,14 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     timer = setInterval(tick, seg * 1000);
   }
   function parar() { if (timer) { clearInterval(timer); timer = null; } }
+  // Logout: para tudo, cala o alarme e esquece a loja (o selo do painel nao mostra
+  // mais a loja antiga).
+  function desligar() {
+    parar();
+    avisar({ ativo: false });
+    prefs = null; prefsTs = 0;
+    alertaLoja = null; alertaUltimoId = -1; alertaParadoDesde = 0; alertaRelembrar = true;
+  }
   function reiniciar() { iniciar(); }
 
   // Impressão de teste com o pedido de exemplo (não usa a trava do servidor).
@@ -428,7 +469,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     emitirStatus();
   }
 
-  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao,
+  return { iniciar, parar, desligar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao,
     estabId: () => (prefs && Number(prefs.id)) || 0, get conectado() { return conectado; } };
 }
 

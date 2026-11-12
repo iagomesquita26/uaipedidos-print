@@ -252,7 +252,7 @@ function fazerLogout(motivo) {
   store.limparToken();
   store.setConfig({ email: '' });
   store.setSenha('');
-  if (poller) poller.parar();
+  if (poller) poller.desligar(); // tambem cala o alarme
   enviarStatus(poller ? poller.status() : null);
 }
 

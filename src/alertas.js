@@ -18,6 +18,9 @@ const { BrowserWindow, Notification, screen } = require('electron');
 const ASSETS = path.join(__dirname, '..', 'assets');
 const UI = path.join(__dirname, '..', 'ui');
 const REPETIR_MS = 6000; // de quanto em quanto tempo o alarme toca de novo
+// Rede de seguranca: sem noticia do servidor por este tempo (internet caiu, por
+// exemplo), o alarme para, porque nao da para saber se o pedido ja foi aceito.
+const SEM_NOTICIA_MS = 5 * 60 * 1000;
 
 const PADRAO = { aviso: true, alarme: false, som: 'alarme', volume: 80 };
 const SONS = ['alarme', 'sirene', 'sino'];
@@ -48,6 +51,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
   let timer = null;
   let janela = null;
   let lembrou = false;        // lembrete "aguardando aceite" so uma vez por execucao
+  let ultimaNoticia = Date.now(); // ultima vez que o poller mandou a situacao
 
   function notificar(titulo, corpo, idPedido, silencioso) {
     try {
@@ -86,7 +90,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
       width: 380, height: 230, x, y,
       title: 'Pedido novo',
       icon: path.join(ASSETS, 'icon.png'),
-      resizable: false, maximizable: false, fullscreenable: false,
+      resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
       alwaysOnTop: true, show: false, autoHideMenuBar: true,
       webPreferences: {
         preload: path.join(__dirname, 'preload-alarme.js'),
@@ -95,7 +99,17 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
         autoplayPolicy: 'no-user-gesture-required',
       },
     });
+    // Acima de tudo, inclusive de programa em tela cheia (no Mac, em qualquer mesa).
+    try { janela.setAlwaysOnTop(true, 'screen-saver'); } catch (e) {}
+    if (process.platform === 'darwin') {
+      try { janela.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }); } catch (e) {}
+    }
     janela.loadFile(path.join(UI, 'alarme.html'));
+    // Se a pagina do alarme travar, descarta a janela; o proximo toque cria outra.
+    janela.webContents.on('render-process-gone', () => {
+      const j = janela; janela = null;
+      try { if (j && !j.isDestroyed()) { j.removeAllListeners('close'); j.destroy(); } } catch (e) {}
+    });
     // Fechar a janelinha conta como "Vi o pedido".
     janela.on('close', () => { janela = null; silenciar(); });
     janela.on('closed', () => { janela = null; });
@@ -124,7 +138,14 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
       try { if (!janela.isVisible()) janela.showInactive(); } catch (e) {}
       if (chegouNovo) tocarUmaVez();
     }
-    if (!timer) timer = setInterval(() => { if (!tocando.size) return pararAlarme(); tocarUmaVez(); }, REPETIR_MS);
+    // Pedido novo tocou agora: a repeticao recomeca a contar daqui (sem som em cima de som).
+    if (chegouNovo && timer) { clearInterval(timer); timer = null; }
+    if (!timer) timer = setInterval(() => {
+      if (!tocando.size) return pararAlarme();
+      if (Date.now() - ultimaNoticia > SEM_NOTICIA_MS) { tocando.clear(); return pararAlarme(); }
+      if (!janela || janela.isDestroyed()) { criarJanela(); return; }
+      tocarUmaVez();
+    }, REPETIR_MS);
   }
 
   function pararAlarme() {
@@ -149,6 +170,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
   // ev = { cfg, ativo, inicio, novos: [pedido], pendentes: [id] }
   function atualizar(ev) {
     const e = ev || {};
+    ultimaNoticia = Date.now();
     cfgAtual = normalizar(e.cfg);
     if (!e.ativo) { tocando.clear(); pararAlarme(); return; }
     const pendentes = new Set((e.pendentes || []).map(Number));
@@ -157,6 +179,7 @@ function criarAlertas({ abrirPedido = () => {}, registrarLog = () => {} } = {}) 
     // Pedido aceito/recusado em qualquer lugar sai do alarme.
     for (const id of Array.from(tocando.keys())) if (!pendentes.has(id)) tocando.delete(id);
 
+    if (e.inicio && e.relembrar) lembrou = false; // trocou de loja ou voltou de muito tempo parado
     if (e.inicio) {
       // Ao ligar o programa: so um lembrete, sem alarme, dos que ja estavam esperando.
       if (cfgAtual.aviso && pendentes.size && !lembrou) {
