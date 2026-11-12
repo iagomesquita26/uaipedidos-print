@@ -17,12 +17,13 @@ const api = require('./api');
 const render = require('./render');
 const printer = require('./printer');
 const store = require('./store');
+const alertas = require('./alertas');
 
 // Atualiza as preferências da loja a cada 1 min. Desde a 1.1.0 as vias vem so do
 // painel, entao uma troca la precisa chegar rapido aqui.
 const CACHE_PREFS_MS = 60 * 1000;
 
-function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () => {} } = {}) {
+function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => {} } = {}) {
   let timer = null;
   let rodando = false;      // um tick por vez
   let primeiraVolta = true; // não avisa/soa pedidos que já existiam ao ligar
@@ -30,6 +31,13 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   let prefsTs = 0;
   let conectado = false;
   let ultimoErro = '';
+
+  // Avisos de pedido novo (1.1.0). Mesma regra do painel (pedidos-motor.js):
+  // pedido novo = id acima do ultimo visto, menos os recebidos com a loja fechada,
+  // os agendados (esses avisam quando a hora chega, pelo "despertar") e os lancados
+  // pela propria loja no painel. O alarme vale enquanto o pedido espera aceite.
+  let alertaUltimoId = -1;          // -1 = ainda nao leu (primeira volta so memoriza)
+  const despertados = new Set();    // agendados que ja avisaram
 
   // Espera crescente quando o login falha (senha trocada/expirada). Em vez de
   // martelar o servidor a cada 5s de forma muda, espera 15s, 30s, 60s... ate 5 min,
@@ -191,7 +199,20 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       const ctrl = store.getControle();
       // Bloqueio remoto, pausa do usuario ou pausa remota: nao busca nem imprime
       // pedidos. Reporta desconectado para o navegador voltar a assumir.
-      if (cfg.pausado || ctrl.pausar || ctrl.bloqueado) { conectado = false; ultimoErro = ''; limparFila(); emitirStatus(); return; }
+      if (cfg.pausado || ctrl.pausar || ctrl.bloqueado) {
+        conectado = false; ultimoErro = ''; limparFila();
+        // Impressao pausada nao cala o aviso de pedido novo (a loja ainda precisa
+        // aceitar). So o bloqueio do suporte desliga tudo neste PC.
+        if (ctrl.bloqueado || (proximaAuthTs && Date.now() < proximaAuthTs) || !store.getToken()) avisar({ ativo: false });
+        else {
+          try {
+            const token = store.getToken();
+            const l = await api.listaAbertos(cfg.base, token, 2);
+            await verificarAlertas(cfg, token, (l && l.pedidos) || []);
+          } catch (e) { if (e && e.status === 401) store.limparToken(); }
+        }
+        emitirStatus(); return;
+      }
       // Espera crescente apos falha de login: nao tenta de novo antes da hora.
       if (proximaAuthTs && Date.now() < proximaAuthTs) { conectado = false; emitirStatus(); return; }
       const token = await garantirToken();
@@ -203,19 +224,8 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
       const pedidos = (lista && lista.pedidos) || [];
       const maxId = pedidos.reduce((m, p) => Math.max(m, Number(p.id) || 0), 0);
 
-      // Aviso de pedido novo (som/notificação), sem repetir os que já existiam.
-      const estado = store.getEstado();
-      if (primeiraVolta) {
-        store.setLastSeen(maxId);
-        primeiraVolta = false;
-      } else {
-        const novos = pedidos.filter(p => Number(p.id) > Number(estado.lastSeenId || 0));
-        if (novos.length && cfg.som) {
-          novos.sort((a, b) => Number(a.id) - Number(b.id));
-          onNovoPedido(novos[novos.length - 1], novos.length);
-        }
-        if (maxId > 0) store.setLastSeen(maxId);
-      }
+      if (maxId > 0) store.setLastSeen(maxId);
+      primeiraVolta = false;
 
       // Impressão dos pedidos em preparo ainda não impressos.
       for (const p of pedidos) {
@@ -231,6 +241,11 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
           if (e.status === 401) { store.limparToken(); conectado = false; throw e; }
           onLog('aviso', 'Não consegui ler o pedido #' + (p.numero || id) + ' agora, tento de novo.');
         }
+      }
+      // Avisos depois da impressao, para nunca atrasar o cupom. Erro aqui nao
+      // derruba a volta.
+      try { await verificarAlertas(cfg, token, pedidos); } catch (e) {
+        if (e && e.status === 401) throw e;
       }
       emitirStatus();
     } catch (e) {
@@ -255,10 +270,53 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     }
   }
 
+  // Escolha da loja (aba Impressao do painel). O sinal de vida traz a mais nova
+  // (controle.alertas, a cada ~30s); as preferencias da loja servem de reserva.
+  function configAlertas() {
+    const c = store.getControle();
+    if (c && c.alertas) return c.alertas;
+    return (prefs && prefs.print_alertas) || null;
+  }
+
+  function avisar(ev) { try { onAlertas(Object.assign({ cfg: configAlertas() }, ev)); } catch (e) {} }
+
+  async function verificarAlertas(cfg, token, pedidos) {
+    const al = alertas.normalizar(configAlertas());
+    // cfg.som: chave "Avisos de pedido novo neste computador" (tela do programa).
+    if (cfg.som === false || (!al.aviso && !al.alarme)) { alertaUltimoId = -1; avisar({ ativo: false }); return; }
+    const pg = await api.ping(cfg.base, token);
+    const pendentes = ((pg && pg.pendentes) || []).map(Number).filter(Boolean);
+    const despertar = ((pg && pg.despertar) || []).map(Number).filter(Boolean);
+    const maxServ = Number(pg && pg.max_id) || 0;
+    if (alertaUltimoId < 0) {
+      alertaUltimoId = maxServ;
+      despertar.forEach(id => despertados.add(id));
+      avisar({ ativo: true, inicio: true, pendentes });
+      return;
+    }
+    const novos = pedidos.filter(p => {
+      const id = Number(p.id);
+      return id > alertaUltimoId && Number(p.recebido_fechado) !== 1 && !p.agendado_para && p.canal !== 'painel';
+    });
+    // Agendados cuja hora chegou: avisam uma vez (podem ser antigos, fora da lista).
+    for (const id of despertar) {
+      if (despertados.has(id)) continue;
+      despertados.add(id);
+      let p = pedidos.find(x => Number(x.id) === id);
+      if (!p) { try { const d = await api.detalhe(cfg.base, token, id); p = d && d.pedido; } catch (e) { p = null; } }
+      novos.push(p || { id, numero: id });
+    }
+    if (despertados.size > 500) { const a = Array.from(despertados).slice(-200); despertados.clear(); a.forEach(i => despertados.add(i)); }
+    alertaUltimoId = Math.max(alertaUltimoId, maxServ);
+    novos.sort((a, b) => Number(a.id) - Number(b.id));
+    avisar({ ativo: true, novos, pendentes });
+  }
+
   function iniciar() {
     parar();
     primeiraVolta = true;
     prefsTs = 0; // reconexao/config nova: busca as preferencias da loja de novo
+    alertaUltimoId = -1; // e os avisos recomecam so memorizando
     backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // reconexao manual: tenta ja
     const seg = Math.max(5, Number(store.getConfig().intervalo) || 12);
     onLog('info', 'Monitorando pedidos a cada ' + seg + ' segundos.');
@@ -370,7 +428,8 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
     emitirStatus();
   }
 
-  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao, get conectado() { return conectado; } };
+  return { iniciar, parar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao,
+    estabId: () => (prefs && Number(prefs.id)) || 0, get conectado() { return conectado; } };
 }
 
 module.exports = { criarPoller };

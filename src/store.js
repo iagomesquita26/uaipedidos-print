@@ -109,13 +109,15 @@ if (_cfg.vias !== 'auto') { _cfg.vias = 'auto'; salvarJson(ARQ_CFG, _cfg); }
 
 // Controle remoto (vem na resposta do print_log). So em memoria de proposito: ao
 // reiniciar, volta ao normal ate o servidor confirmar de novo o bloqueio/pausa.
-let _controle = { bloqueado: false, pausar: false, versao_recomendada: '' };
+let _controle = { bloqueado: false, pausar: false, versao_recomendada: '', alertas: null };
 function setControle(c) {
   if (!c || typeof c !== 'object') return;
   _controle = {
     bloqueado: !!c.bloqueado,
     pausar: !!c.pausar,
     versao_recomendada: String(c.versao_recomendada || ''),
+    // 1.1.0: avisos de pedido novo escolhidos pela loja (null = servidor antigo)
+    alertas: (c.alertas && typeof c.alertas === 'object') ? c.alertas : null,
   };
 }
 function getControle() { return { ..._controle }; }

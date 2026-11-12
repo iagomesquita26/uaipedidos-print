@@ -28,6 +28,8 @@ let store = null;
 let printer = null;
 let telemetria = null;
 let comandos = null;
+let alertas = null;   // aviso de pedido novo e alarme (1.1.0)
+let sinalLocal = null; // "este computador" para o painel aberto neste PC (1.1.0)
 const logs = [];           // histórico curto de mensagens
 const MAX_LOGS = 250;
 
@@ -41,6 +43,8 @@ let ultimaVersaoAvisada = ''; // evita repetir a notificacao da mesma versao
 // Uma instância só (abrir de novo apenas mostra a janela). A segunda cópia sai na
 // hora, sem criar ícone, sem ler a configuração e sem mandar sinal de vida.
 const instanciaPrincipal = app.requestSingleInstanceLock();
+// Sem isto o Windows nao mostra (ou mostra sem nome) as notificacoes do programa.
+if (process.platform === 'win32') { try { app.setAppUserModelId('br.com.uaipedidos.print'); } catch (e) {} }
 if (!instanciaPrincipal) { app.quit(); }
 else app.on('second-instance', () => mostrarJanela());
 
@@ -302,6 +306,7 @@ function atualizarTray(st) {
     click: () => alternarPausa(!cfg.pausado),
   });
   itens.push({ label: 'Imprimir teste', enabled: !ctrl.bloqueado, click: async () => { await poller.imprimirTeste(); } });
+  if (alertas && alertas.tocandoAgora()) itens.unshift({ label: 'Silenciar alarme', click: () => { alertas.silenciar(); atualizarTray(); } });
   itens.push({ type: 'separator' });
   itens.push({ label: 'Sair', click: () => { app.isQuitting = true; app.quit(); } });
   tray.setContextMenu(Menu.buildFromTemplate(itens));
@@ -322,17 +327,18 @@ function aplicarAutostart() {
   } catch (e) {}
 }
 
-function avisarPedidoNovo(pedido, quantos) {
+// Abre o painel da loja no navegador, ja no pedido (quando houver). O "pc" avisa o
+// painel que ele foi aberto por este computador (selo "Este computador").
+function abrirPedidoNoPainel(id) {
   try {
-    if (!Notification.isSupported()) return;
-    const n = new Notification({
-      title: quantos > 1 ? (quantos + ' pedidos novos') : ('Novo pedido #' + (pedido.numero || pedido.id)),
-      body: (pedido.cliente_nome || 'Cliente') + (pedido.total != null ? ' - R$ ' + Number(pedido.total).toFixed(2).replace('.', ',') : ''),
-      icon: path.join(ASSETS, 'icon.png'),
-      silent: false,
-    });
-    n.on('click', () => mostrarJanela());
-    n.show();
+    const u = new URL(String(store.getConfig().base || 'https://uaipedidos.com.br'));
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') return;
+    u.pathname = '/painel.php';
+    u.search = '';
+    u.searchParams.set('tela', 'pedidos');
+    if (Number(id) > 0) u.searchParams.set('pedido', String(Number(id)));
+    u.searchParams.set('pc', store.getAgenteId());
+    shell.openExternal(u.toString());
   } catch (e) {}
 }
 
@@ -419,6 +425,8 @@ function configurarIpc() {
   ipcMain.handle('abrir:pasta', () => { shell.openPath(store.pastaDados()); return true; });
   ipcMain.handle('abrir:instalacao', () => { abrirPaginaInstalacao(); return true; });
   ipcMain.handle('atualizar:agora', () => atualizarAgora('botao'));
+  ipcMain.handle('alarme:vi', () => { if (alertas) alertas.silenciar(); atualizarTray(); return true; });
+  ipcMain.handle('alarme:abrir', () => { if (alertas) alertas.abrirPrimeiro(); atualizarTray(); return true; });
 }
 
 app.whenReady().then(() => {
@@ -426,11 +434,25 @@ app.whenReady().then(() => {
   store = require('./store');
   printer = require('./printer');
   const { criarPoller } = require('./poller');
+  alertas = require('./alertas').criarAlertas({ abrirPedido: abrirPedidoNoPainel, registrarLog });
+  let alarmeAntes = false;
   poller = criarPoller({
     onLog: registrarLog,
     onStatus: enviarStatus,
-    onNovoPedido: avisarPedidoNovo,
+    onAlertas: (ev) => {
+      alertas.atualizar(ev);
+      // o item "Silenciar alarme" do icone aparece e some junto com o alarme
+      const agora = alertas.tocandoAgora();
+      if (agora !== alarmeAntes) { alarmeAntes = agora; atualizarTray(); }
+    },
   });
+  try {
+    sinalLocal = require('./local').iniciar({
+      getInfo: () => ({ versao: app.getVersion(), agente_id: store.getAgenteId(), estabelecimento_id: poller.estabId() }),
+      getBase: () => store.getConfig().base,
+      registrarLog,
+    });
+  } catch (e) {}
 
   // Telemetria: envia o diario de bordo (estado + eventos) ao servidor e recebe o
   // bloco de controle, que repassamos para aoReceberControle. Os comandos de suporte
@@ -492,4 +514,5 @@ app.on('before-quit', () => {
   if (!instanciaPrincipal) return;
   try { if (telemetria) telemetria.registrar('info', 'Programa encerrado.', { tipo: 'parada' }); } catch (e) {}
   if (poller) poller.parar();
+  try { if (sinalLocal) sinalLocal.parar(); } catch (e) {}
 });

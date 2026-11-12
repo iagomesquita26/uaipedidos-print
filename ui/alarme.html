@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'">
+<title>Pedido novo</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  body{margin:0;overflow:hidden;user-select:none}
+  .al{padding:16px 18px;display:flex;flex-direction:column;gap:10px;height:100vh;box-sizing:border-box}
+  .al-topo{display:flex;align-items:center;gap:12px}
+  .al-topo img{width:40px;height:40px;border-radius:10px}
+  .al-tit{font-size:18px;font-weight:800;color:var(--brand);animation:pisca 1s ease-in-out infinite}
+  .al-sub{font-size:13px;color:var(--muted)}
+  .al-botoes{display:flex;gap:8px;margin-top:auto}
+  .al-botoes button{flex:1}
+  @keyframes pisca{50%{opacity:.45}}
+</style>
+</head>
+<body>
+<div class="al">
+  <div class="al-topo">
+    <img src="../assets/icon.png" alt="">
+    <div>
+      <div id="tit" class="al-tit">Pedido novo</div>
+      <div id="sub" class="al-sub">Aguardando aceite no painel do UaiPedidos.</div>
+    </div>
+  </div>
+  <div class="al-sub">O alarme para sozinho quando o pedido for aceito ou recusado.</div>
+  <div class="al-botoes">
+    <button id="abrir" class="btn b-primary">Abrir no painel</button>
+    <button id="vi" class="btn b-soft">Vi o pedido</button>
+  </div>
+</div>
+<script src="alarme.js"></script>
+</body>
+</html>
