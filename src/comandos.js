@@ -24,6 +24,10 @@ function configurar(deps) { ctx = deps || {}; }
 // comando se perdia. A guarda por id (cmdJaFeito/cmdMarcarFeito) evita repetir.
 let processando = false;
 const filaCmd = [];
+// Depois de um reiniciar/deslogar, os comandos que sobraram na fila nao rodam (o
+// programa vai fechar ou ficou sem acesso). Eles recebem um resultado de erro, que
+// fica no disco e volta ao painel, em vez de sumirem como "entregue" para sempre.
+let encerrando = '';
 
 // Executa a lista de comandos recebida, um por vez, e guarda os resultados.
 async function processar(lista) {
@@ -37,6 +41,7 @@ async function processar(lista) {
       const id = Number(cmd && cmd.id);
       if (!id || store.cmdJaFeito(id)) continue; // ja executado: nao repete
       store.cmdMarcarFeito(id);
+      if (encerrando) { store.cmdResultAdicionar({ id: id, status: 'erro', resultado: 'Nao executado: ' + encerrando }); continue; }
       try {
         const r = await executar(cmd);
         if (r && r.jaRegistrado) continue; // o proprio executar ja guardou o resultado
@@ -47,6 +52,7 @@ async function processar(lista) {
     }
   } finally {
     processando = false;
+    if (encerrando.startsWith('a loja')) encerrando = '';
   }
   // tenta devolver os resultados o quanto antes (fora do heartbeat em andamento)
   setTimeout(() => { try { if (ctx.telemetria) ctx.telemetria.flush(true); } catch (e) {} }, 1200);
@@ -91,15 +97,19 @@ async function executar(cmd) {
       if (p.impressora !== undefined) permitido.impressora = String(p.impressora);
       // Desde a 1.1.0 as vias vem so do painel: um pedido de vias vira "seguir a loja".
       if (p.vias !== undefined)       permitido.vias = 'auto';
+      const viasIgnoradas = p.vias !== undefined && p.vias !== 'auto';
       if (p.intervalo !== undefined)  permitido.intervalo = Math.max(5, Math.min(120, Number(p.intervalo) || 5));
       if (p.copias !== undefined)     permitido.copiasCozinha = Math.max(1, Math.min(5, Number(p.copias) || 1));
       if (p.som !== undefined)        permitido.som = !!p.som;
       if (p.autostart !== undefined)  permitido.autostart = !!p.autostart;
       if (p.pausado !== undefined)    permitido.pausado = !!p.pausado; // retomar/pausar pela pausa local
       if (!Object.keys(permitido).length) return { status: 'erro', resultado: 'configuracao vazia' };
+      const aviso = viasIgnoradas ? ' (vias fixas nao valem mais neste PC: desde a 1.1.0 ele segue a escolha da loja na aba Impressao do painel)' : '';
+      // So veio vias fixas: nada mudou de verdade, entao avisa como erro.
+      if (viasIgnoradas && Object.keys(permitido).length === 1) return { status: 'erro', resultado: 'Nao aplicado' + aviso };
       store.setConfig(permitido);
       if (ctx.aplicarConfig) ctx.aplicarConfig(permitido);
-      return { status: 'concluido', resultado: 'Configuracao aplicada: ' + Object.keys(permitido).join(', ') };
+      return { status: 'concluido', resultado: 'Configuracao aplicada: ' + Object.keys(permitido).join(', ') + aviso };
     }
 
     case 'coletar_diagnostico':
@@ -109,6 +119,7 @@ async function executar(cmd) {
     case 'reiniciar': {
       // guarda o resultado AGORA (sobrevive ao reinicio) e tenta mandar antes de sair
       store.cmdResultAdicionar({ id: Number(cmd.id), status: 'concluido', resultado: 'Programa reiniciado' });
+      encerrando = 'o programa foi reiniciado antes';
       try { if (ctx.telemetria) await ctx.telemetria.flush(true); } catch (e) {}
       setTimeout(() => { try { ctx.app.relaunch(); ctx.app.exit(0); } catch (e) {} }, 800);
       return { jaRegistrado: true };
@@ -133,6 +144,7 @@ async function executar(cmd) {
       // Logout remoto: guarda o resultado e envia ANTES de apagar o token (o flush
       // precisa do token), igual ao reiniciar. Depois desconecta.
       store.cmdResultAdicionar({ id: Number(cmd.id), status: 'concluido', resultado: 'Loja desconectada pelo suporte' });
+      encerrando = 'a loja foi desconectada antes';
       try { if (ctx.telemetria) await ctx.telemetria.flush(true); } catch (e) {}
       if (ctx.deslogar) { try { ctx.deslogar(); } catch (e) {} }
       return { jaRegistrado: true };

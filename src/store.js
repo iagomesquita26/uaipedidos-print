@@ -45,24 +45,34 @@ function lerUm(arq) {
   return (j && typeof j === 'object' && !Array.isArray(j)) ? j : null;
 }
 function lerJson(arq, padrao) {
-  // Se o arquivo principal estiver estragado (queda de energia no meio da gravacao
-  // em versoes antigas), tenta a copia temporaria da ultima gravacao.
-  for (const a of [arq, arq + '.tmp']) {
-    try { const j = lerUm(a); if (j) return { ...padrao, ...j }; } catch (e) {}
+  // Se o arquivo principal existir mas estiver estragado (queda de energia no meio
+  // da gravacao), tenta a copia temporaria da ultima gravacao. Se o principal nao
+  // existir (suporte apagou para zerar), comeca do padrao e ignora a copia.
+  try { const j = lerUm(arq); if (j) return { ...padrao, ...j }; } catch (e) {}
+  if (fs.existsSync(arq)) {
+    try {
+      const j = lerUm(arq + '.tmp');
+      if (j) { const r = { ...padrao, ...j }; salvarJson(arq, r); return r; } // conserta o principal
+    } catch (e) {}
   }
   return { ...padrao };
 }
-// Gravacao segura: escreve numa copia temporaria e so depois troca pelo arquivo
-// de verdade. Assim uma queda de energia no meio nao deixa o arquivo pela metade
-// (o que antes fazia o programa "esquecer" a loja e o identificador do PC).
+// Gravacao segura: escreve numa copia temporaria, garante que foi para o disco e
+// so depois troca pelo arquivo de verdade. Assim uma queda de energia no meio nao
+// deixa o arquivo pela metade (o que antes fazia o programa "esquecer" a loja e o
+// identificador do PC).
 function salvarJson(arq, obj) {
   const txt = JSON.stringify(obj, null, 2);
   try {
-    fs.writeFileSync(arq + '.tmp', txt, 'utf8');
+    const fd = fs.openSync(arq + '.tmp', 'w');
+    try { fs.writeSync(fd, txt, null, 'utf8'); try { fs.fsyncSync(fd); } catch (e) {} }
+    finally { fs.closeSync(fd); }
     fs.renameSync(arq + '.tmp', arq);
   } catch (e) {
-    // antivirus segurando o arquivo, por exemplo: grava direto, como antes
+    // antivirus segurando o arquivo, por exemplo: grava direto, como antes, e
+    // apaga a copia temporaria para ela nao voltar velha numa leitura futura.
     try { fs.writeFileSync(arq, txt, 'utf8'); } catch (e2) {}
+    try { fs.unlinkSync(arq + '.tmp'); } catch (e3) {}
   }
 }
 
@@ -173,6 +183,10 @@ function arqAgenteComum() {
 }
 const idValido = v => typeof v === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(v);
 const nomeMaquina = () => { try { return os.hostname(); } catch (e) { return ''; } };
+const nomeUsuario = () => { try { return os.userInfo().username || ''; } catch (e) { return ''; } };
+// O arquivo comum e deste computador E deste usuario do Windows/Mac? (dois
+// usuarios no mesmo PC rodam dois programas, e cada um precisa do seu id)
+const comumEhMeu = c => !!(c && c.maquina && c.maquina === nomeMaquina() && (c.usuario || '') === nomeUsuario());
 function lerAgenteComum() {
   try { const a = arqAgenteComum(); const j = a ? lerUm(a) : null; return (j && idValido(j.agente_id)) ? j : null; } catch (e) { return null; }
 }
@@ -181,23 +195,29 @@ function gravarAgenteComum(id) {
     const a = arqAgenteComum();
     if (!a) return;
     fs.mkdirSync(path.dirname(a), { recursive: true });
-    salvarJson(a, { agente_id: id, maquina: nomeMaquina(), criado_em: new Date().toISOString() });
+    salvarJson(a, { agente_id: id, maquina: nomeMaquina(), usuario: nomeUsuario(), criado_em: new Date().toISOString() });
   } catch (e) {}
 }
 let _agenteConferido = false;
 function getAgenteId() {
   if (idValido(_cfg.agente_id)) {
     // O id local sempre vale. So escreve na pasta comum se ela ainda nao tiver um
-    // (nunca sobrescreve o id de outro usuario do mesmo PC).
-    if (!_agenteConferido) { _agenteConferido = true; if (!lerAgenteComum()) gravarAgenteComum(_cfg.agente_id); }
+    // (nunca sobrescreve o id de outro usuario do mesmo PC), ou se for o mesmo id
+    // e o nome do computador mudou (PC renomeado).
+    if (!_agenteConferido) {
+      _agenteConferido = true;
+      const comum = lerAgenteComum();
+      if (!comum || (comum.agente_id === _cfg.agente_id && !comumEhMeu(comum))) gravarAgenteComum(_cfg.agente_id);
+    }
     return _cfg.agente_id;
   }
   _agenteConferido = true;
   let id = '';
   const comum = lerAgenteComum();
-  // Reaproveita o id da pasta comum so se for deste mesmo computador (a pasta pode
-  // ter vindo copiada de outra maquina, por exemplo numa imagem do Windows).
-  if (comum && comum.maquina && comum.maquina === nomeMaquina()) id = comum.agente_id;
+  // Reaproveita o id da pasta comum so se for deste mesmo computador e usuario (a
+  // pasta pode ter vindo copiada de outra maquina, numa imagem do Windows, ou ser
+  // de outro usuario do mesmo PC).
+  if (comumEhMeu(comum)) id = comum.agente_id;
   if (!id) {
     try { const { randomUUID } = require('crypto'); id = randomUUID(); } catch (e) {}
     if (!id) id = 'ag-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);

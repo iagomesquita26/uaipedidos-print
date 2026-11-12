@@ -18,7 +18,9 @@ const render = require('./render');
 const printer = require('./printer');
 const store = require('./store');
 
-const CACHE_PREFS_MS = 5 * 60 * 1000; // atualiza as preferências da loja a cada 5 min
+// Atualiza as preferências da loja a cada 1 min. Desde a 1.1.0 as vias vem so do
+// painel, entao uma troca la precisa chegar rapido aqui.
+const CACHE_PREFS_MS = 60 * 1000;
 
 function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () => {} } = {}) {
   let timer = null;
@@ -44,6 +46,9 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   // de verdade que nao estamos segurando nenhum pedido. Na proxima volta sem bloqueio,
   // o tick reescaneia os pedidos em preparo ainda nao impressos e reenfileira.
   function limparFila() { fila.length = 0; naFila.clear(); }
+
+  // Se o cupom cair no modo de reserva, aparece no log (e chega ao suporte).
+  try { render.definirAvisoFalha(msg => onLog('aviso', msg, { tipo: 'impressao' })); } catch (e) {}
 
   // Preferencias de impressao resolvidas da loja (largura, fonte, margens).
   function prefsImpressao() {
@@ -87,6 +92,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   // Busca (com cache) as preferências e os dados da loja.
   async function pegarPrefs(base, token, forcar) {
     if (!forcar && prefs && (Date.now() - prefsTs) < CACHE_PREFS_MS) return prefs;
+    try { render.definirBase(base); } catch (e) {}
     try {
       const j = await api.me(base, token);
       // o endpoint pode devolver a loja direto ou dentro de uma chave
@@ -252,6 +258,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onNovoPedido = () 
   function iniciar() {
     parar();
     primeiraVolta = true;
+    prefsTs = 0; // reconexao/config nova: busca as preferencias da loja de novo
     backoffAuth = 0; proximaAuthTs = 0; avisouSenha = false; // reconexao manual: tenta ja
     const seg = Math.max(5, Number(store.getConfig().intervalo) || 12);
     onLog('info', 'Monitorando pedidos a cada ' + seg + ' segundos.');
