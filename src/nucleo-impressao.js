@@ -86,7 +86,9 @@ window.criarNucleoImpressao = function (core) {
       // Preferências da loja (aba Impressão). Sem elas, valem os padrões de sempre.
       const cfgL = larguraImp(impCfg.largura);
       const mm = v => Math.min(50, Math.max(0, Number(v) || 0));
-      const mt = mm(impCfg.margem_topo), mb = mm(impCfg.margem_baixo), mEsq = mm(impCfg.margem_esq), mDir = mm(impCfg.margem_dir);
+      // Laterais (1.2.0): podem ser negativas, até -10 mm, para usar a borda da impressora.
+      const mmLado = v => Math.min(50, Math.max(-10, Number(v) || 0));
+      const mt = mm(impCfg.margem_topo), mb = mm(impCfg.margem_baixo), mEsq = mmLado(impCfg.margem_esq), mDir = mmLado(impCfg.margem_dir);
       const fam = (IMP_FONTES[impCfg.fonte] || IMP_FONTES.sans).css;
       const tam = Math.min(20, Math.max(10, Number(impCfg.fonte_tam) || Number(fonteBase) || 13));
       const larguraConteudo = Math.max(120, Math.round((cfgL - mEsq - mDir) * 3.78));
@@ -148,7 +150,10 @@ window.criarNucleoImpressao = function (core) {
         '.fimcorte { text-align:center; font-size:.8em; letter-spacing:2px; }' +
         '.feedpont { text-align:center; letter-spacing:2px; color:#000; font-weight:bold; }' +
         (compacto ? '.sep{margin:3px 0;} .it{margin:3px 0 0;} .cat{margin:6px 0 2px;} .lin{gap:8px;} .desc{margin:0 0 1px;}' : '') +
-        '@media print { .bobina { max-width:100%; padding:0 ' + mDir + 'mm 0 ' + mEsq + 'mm; } }' +
+        '@media print { .bobina { max-width:100%; padding:0 ' + Math.max(0, mDir) + 'mm 0 ' + Math.max(0, mEsq) + 'mm; } }' +
+        // Margem negativa: a bobina passa da borda do papel do lado escolhido. Sem
+        // margem negativa esta linha não entra e o papel sai igual ao de sempre.
+        ((mEsq < 0 || mDir < 0) ? '@media print { .bobina { max-width:none; margin:0 ' + Math.min(0, mDir) + 'mm 0 ' + Math.min(0, mEsq) + 'mm; } }' : '') +
         '</style></head><body>' + corpoDoc +
         (comScript === false ? '' :
           '<scr' + 'ipt>window.onload = function(){ window.__pronto = 1; setTimeout(function(){ window.print(); }, 60); };' +
@@ -171,14 +176,15 @@ window.criarNucleoImpressao = function (core) {
     // Abre a janela de impressão com uma ou mais vias já montadas (papel único).
     function abrirImpressaoVias(vias) {
       const lista = (Array.isArray(vias) ? vias : [vias]).filter(Boolean);
-      if (!lista.length) return;
+      if (!lista.length) return false;
       const w = window.open('', '_blank', 'width=420,height=640');
-      if (!w) { avisar('O navegador bloqueou a janela de impressão. Libere os pop-ups deste site.', 'erro'); return; }
+      if (!w) { avisar('O navegador bloqueou a janela de impressão. Libere os pop-ups deste site.', 'erro'); return false; }
       w.document.write(docImpressaoVias(lista, true));
       w.document.close();
       w.focus();
       // fallback: se o onload da janela não disparar o print em 900ms, força
       setTimeout(() => { try { if (w && !w.closed && !w.__pronto) w.print(); } catch (e) {} }, 900);
+      return true;
     }
     /* viaCozinha e viaMotoboy só montam o papel a partir de um pedido já
        carregado ({ pedido, itens }). Quem manda para a impressora é outro:
@@ -381,7 +387,8 @@ window.criarNucleoImpressao = function (core) {
     function viaCalibracao() {
       const cfgL = larguraImp(impCfg.largura);
       const mm = v => Math.min(50, Math.max(0, Number(v) || 0));
-      const mEsq = mm(impCfg.margem_esq), mDir = mm(impCfg.margem_dir);
+      const mmLado = v => Math.min(50, Math.max(-10, Number(v) || 0));
+      const mEsq = mmLado(impCfg.margem_esq), mDir = mmLado(impCfg.margem_dir);
       const mt = mm(impCfg.margem_topo), mb = mm(impCfg.margem_baixo);
       const fam = (IMP_FONTES[impCfg.fonte] || IMP_FONTES.sans);
       const tam = Math.min(20, Math.max(10, Number(impCfg.fonte_tam) || 13));
@@ -428,15 +435,47 @@ window.criarNucleoImpressao = function (core) {
     // "As duas" imprime cozinha e entrega juntas, num papel só (com corte no meio).
     function imprimirCozinha() {
       const d = pedDet.value; if (!d || !d.pedido) return;
-      abrirImpressaoVias([viaCozinha(d)]);
+      const ok = abrirImpressaoVias([viaCozinha(d)]);
+      registrarImpressao(d, 'manual', 'cozinha', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
     }
     function imprimirMotoboy() {
       const d = pedDet.value; if (!d || !d.pedido) return;
-      abrirImpressaoVias([viaMotoboy(d)]);
+      const ok = abrirImpressaoVias([viaMotoboy(d)]);
+      registrarImpressao(d, 'manual', 'motoboy', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
     }
     function imprimirAmbas() {
       const d = pedDet.value; if (!d || !d.pedido) return;
-      abrirImpressaoVias([viaCozinha(d), viaMotoboy(d)]);
+      const ok = abrirImpressaoVias([viaCozinha(d), viaMotoboy(d)]);
+      registrarImpressao(d, 'manual', 'ambas', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
+    }
+
+    /* Anota no historico do pedido que ele foi mandado para a impressora (ou que
+       falhou). O navegador nao confirma se o papel saiu, so que foi enviado.
+       Atualiza na hora o detalhe aberto e o icone do cartao no quadro. */
+    function registrarImpressao(det, origem, via, ok, erro) {
+      try { registrarImpressaoJa(det, origem, via, ok, erro); } catch (e) { /* o registro nunca para a impressao */ }
+    }
+    function registrarImpressaoJa(det, origem, via, ok, erro) {
+      const id = det && det.pedido && det.pedido.id;
+      if (!id) return;
+      if (ok === false && !erro) erro = 'O navegador não abriu a impressão';
+      ok = ok !== false;
+      via = via || autoCfg.impressao_vias || 'cozinha';
+      api('/api/estab/pedidos', { method:'POST', body:{ acao:'registrar_impressao', id, origem, via, ok, erro: erro || '' } }).catch(() => {});
+      const linha = { origem, via, meio:'navegador', ok: ok ? 1 : 0, erro: erro || null, criado_em: agoraSql() };
+      const aberto = pedDet.value;
+      if (aberto && aberto.pedido && Number(aberto.pedido.id) === Number(id)) {
+        aberto.impressoes = (aberto.impressoes || []).concat([linha]);
+      }
+      const p = listaPedidos && (listaPedidos.value || []).find(x => Number(x.id) === Number(id));
+      if (p) { if (ok) p.impresso = 1; p.impressao_ultima_ok = ok ? 1 : 0; }
+    }
+    // A lista de pedidos nasce no motor, que roda depois desta fabrica: o painel liga aqui.
+    let listaPedidos = null;
+    function ligarListaPedidos(r) { listaPedidos = r; }
+    function agoraSql() {
+      const d = new Date(), z = n => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + ' ' + z(d.getHours()) + ':' + z(d.getMinutes()) + ':' + z(d.getSeconds());
     }
 
     /* ---- impressão automática ----
@@ -493,28 +532,34 @@ window.criarNucleoImpressao = function (core) {
 
     function imprimirNoIframe(vias) {
       const lista = (Array.isArray(vias) ? vias : [vias]).filter(Boolean);
+      // Devolve true se chegou a chamar o print() do navegador, false se deu erro antes.
+      // (Não dá para saber se o papel saiu nem se o lojista cancelou a janela.)
       return new Promise(resolve => {
-        if (!lista.length) { resolve(); return; }
+        if (!lista.length) { resolve(false); return; }
         const ifr = document.createElement('iframe');
         ifr.setAttribute('aria-hidden', 'true');
         ifr.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
         document.body.appendChild(ifr);
         let encerrado = false;
-        const encerrar = () => {
+        const encerrar = (ok) => {
           if (encerrado) return;
           encerrado = true;
-          setTimeout(() => { try { ifr.remove(); } catch (e) {} resolve(); }, 1200);
+          setTimeout(() => { try { ifr.remove(); } catch (e) {} resolve(ok === true); }, 1200);
         };
         try {
           const doc = ifr.contentDocument || ifr.contentWindow.document;
           doc.open();
           doc.write(docImpressaoVias(lista, false));
           doc.close();
-        } catch (e) { encerrar(); return; }
+        } catch (e) { encerrar(false); return; }
         // Se a loja ativou o logo, o papel tem imagem: espera carregar antes de
         // imprimir (com um teto de 3s), senão sairia sem o logo. Sem imagem, segue
         // como antes, só um respiro para o layout assentar.
-        const disparar = () => { try { ifr.contentWindow.focus(); ifr.contentWindow.print(); } catch (e) {} encerrar(); };
+        const disparar = () => {
+          let ok = false;
+          try { ifr.contentWindow.focus(); ifr.contentWindow.print(); ok = true; } catch (e) {}
+          encerrar(ok);
+        };
         let doc2 = null; try { doc2 = ifr.contentDocument || ifr.contentWindow.document; } catch (e) {}
         const imgs = doc2 ? Array.from(doc2.images || []).filter(im => !im.complete) : [];
         if (imgs.length) {
@@ -526,7 +571,7 @@ window.criarNucleoImpressao = function (core) {
           setTimeout(disparar, 250);
         }
         // Rede de segurança: nada pode deixar a fila presa para sempre.
-        setTimeout(encerrar, 15000);
+        setTimeout(() => encerrar(false), 15000);
       });
     }
 
@@ -580,12 +625,22 @@ window.criarNucleoImpressao = function (core) {
               // congela a página). Assim a fala não fica "presa" esperando a impressão; a
               // voz toca por cima do diálogo. Teto de 2,5s para a impressão nunca travar.
               await esperarVozComecar(2500);
-              // As vias do pedido (cozinha + entrega) vão juntas, num papel só.
-              await imprimirNoIframe(vias);
+              if (document.hidden) {
+                // A aba escondeu durante a espera da voz: o print() não rodaria. Volta para
+                // a fila, já reservado, e imprime quando a aba voltar.
+                det._impresso = true;
+                impFila.unshift(det);
+              } else {
+                // As vias do pedido (cozinha + entrega) vão juntas, num papel só.
+                const ok = await imprimirNoIframe(vias);
+                registrarImpressao(det, 'automatico', autoCfg.impressao_vias || 'cozinha', ok);
+                if (!ok) avisar('Não consegui enviar o pedido #' + (det.pedido.numero || det.pedido.id) + ' para a impressora. Abra o pedido e use o botão de imprimir.', 'erro');
+              }
             }
           }
         }
       } catch (e) {
+        registrarImpressao(det, 'automatico', autoCfg.impressao_vias || 'cozinha', false, (e && e.message) || 'Erro ao enviar para a impressora');
         avisar('Não consegui enviar o pedido #' + (det.pedido.numero || det.pedido.id) + ' para a impressora. Abra o pedido e use o botão de imprimir.', 'erro');
       }
       impOcupado = false;
@@ -615,6 +670,6 @@ window.criarNucleoImpressao = function (core) {
     impCfg, IMP_FONTES, IMP_AV_PADRAO, sincronizarImpressao, larguraImp, herdarAvAntigo, docImpressaoVias,
     viaCozinha, viaMotoboy, viaCalibracao, imprimirCalibracao, abrirImpressaoVias,
     imprimirCozinha, imprimirMotoboy, imprimirAmbas,
-    imprimirSeAutomatico, processarFilaImp, viasDoPedido, imprimirNoIframe,
+    imprimirSeAutomatico, processarFilaImp, viasDoPedido, imprimirNoIframe, registrarImpressao, ligarListaPedidos,
   };
 };

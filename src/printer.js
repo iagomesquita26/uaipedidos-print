@@ -74,7 +74,11 @@ async function listarImpressorasDetalhado() {
 
 // Imprime um documento HTML completo. Resolve quando o sistema aceitou o trabalho.
 function imprimirHtml(html, opcoes = {}) {
-  const { deviceName = '', copies = 1, larguraMm = 80, onLog } = opcoes;
+  const { deviceName = '', copies = 1, larguraMm = 80, margemImpressora = false, onLog } = opcoes;
+  // 1.2.0: com a caixa "Usar a mesma margem do botao Imprimir" ligada, imprime
+  // dentro da area que a impressora alcanca (como a janela de impressao do
+  // navegador). Desligada (padrao), segue como sempre: papel inteiro, margem zero.
+  const marginType = margemImpressora ? 'printableArea' : 'none';
   const log = (typeof onLog === 'function') ? onLog : function () {};
   // Largura do rolo em px de tela (96 dpi), para a janela oculta montar o cupom
   // na mesma largura em que ele sera impresso e a medida de altura bater.
@@ -185,7 +189,7 @@ function imprimirHtml(html, opcoes = {}) {
         const cfgPrint = {
           silent: true,
           printBackground: true,
-          margins: { marginType: 'none' },
+          margins: { marginType },
           copies: Math.max(1, Number(copies) || 1),
           pageSize: {
             width: Math.round(larguraFinalMm * MICRON_POR_MM),
@@ -198,7 +202,7 @@ function imprimirHtml(html, opcoes = {}) {
         // errado, esta linha no log diz exatamente o que o programa tentou fazer.
         log('info', 'Enviando para "' + (deviceUsado || 'impressora padrao') + '", '
           + 'papel ' + larguraFinalMm + 'mm x ' + alturaFinalMm + 'mm, '
-          + cfgPrint.copies + ' via(s).');
+          + cfgPrint.copies + ' via(s), margem ' + (marginType === 'none' ? 'zero' : 'da impressora') + '.');
 
         win.webContents.print(cfgPrint, (sucesso, motivo) => {
           clearTimeout(guarda);

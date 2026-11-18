@@ -22,6 +22,7 @@ const alertas = require('./alertas');
 // Atualiza as preferências da loja a cada 1 min. Desde a 1.1.0 as vias vem so do
 // painel, entao uma troca la precisa chegar rapido aqui.
 const CACHE_PREFS_MS = 60 * 1000;
+const PREFS_FRESCAS_MS = 5 * 1000; // 1.2.0: antes de imprimir, preferencias com no maximo 5s
 
 function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => {} } = {}) {
   let timer = null;
@@ -140,6 +141,30 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     return prefs;
   }
 
+  // 1.2.0: as margens valem na hora de imprimir. Busca as preferencias de novo se
+  // ja tem mais de alguns segundos (falhou: segue com o ultimo ajuste conhecido).
+  async function prefsFrescas(base, token) {
+    const velhas = !prefs || (Date.now() - prefsTs) > PREFS_FRESCAS_MS;
+    try { await pegarPrefs(base, token, velhas); } catch (e) {}
+    return prefs || {};
+  }
+  // Preferencias como vao para o papel deste computador. Margem lateral negativa
+  // so vale com a caixa "Usar a mesma margem do botao Imprimir" ligada para ele;
+  // sem a caixa, vale 0. Devolve tambem o resumo que vai para o historico.
+  function prefsDoPapel() {
+    const p = Object.assign({}, prefs || {});
+    const margemImpressora = !!store.getControle().margem_impressora;
+    if (!margemImpressora) {
+      ['imp_margem_esq', 'imp_margem_dir', 'margem_esq', 'margem_dir'].forEach(k => { if (Number(p[k]) < 0) p[k] = 0; });
+    }
+    const n = render.normalizarCfg(p) || {};
+    return {
+      p, margemImpressora, largura: n.largura,
+      dados: { largura: n.largura, margem_esq: n.margem_esq, margem_dir: n.margem_dir,
+               margem_impressora: margemImpressora, margem_tipo: margemImpressora ? 'impressora' : 'zero' },
+    };
+  }
+
   // Quais vias imprimir: desde a 1.1.0 so o painel decide (aba Impressao), igual a
   // impressao pelo navegador. Se o servidor nao respondeu ainda, usa a ultima
   // escolha conhecida da loja, guardada no disco.
@@ -183,13 +208,15 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
         onLog('info', 'Pedido #' + numero + ' já foi impresso em outro ponto, ignorando.');
         store.marcarProcessado(id);
       } else {
+        await prefsFrescas(cfg.base, token);
         const escolha = escolhaVias();
-        const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
+        const papel = prefsDoPapel();
+        const html = render.montarDocumento(det, papel.p, papel.p, escolha);
         if (!html) { onLog('aviso', 'Pedido #' + numero + ' sem vias para imprimir.'); }
         else {
           onLog('info', 'Imprimindo o pedido #' + numero + '...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
-          await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-          onLog('ok', 'Pedido #' + numero + ' enviado para a impressora.', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+          await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, papel.largura, papel.margemImpressora);
+          onLog('ok', 'Pedido #' + numero + ' enviado para a impressora.', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora, dados: papel.dados });
         }
         store.marcarProcessado(id);
       }
@@ -207,10 +234,10 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     }
   }
 
-  async function imprimirComTentativas(html, impressora, copias, larguraMm) {
+  async function imprimirComTentativas(html, impressora, copias, larguraMm, margemImpressora) {
     let ultima = null;
     for (let i = 0; i < 3; i++) {
-      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias, larguraMm: larguraMm, onLog: onLog }); return; }
+      try { await printer.imprimirHtml(html, { deviceName: impressora, copies: copias, larguraMm: larguraMm, margemImpressora: !!margemImpressora, onLog: onLog }); return; }
       catch (e) { ultima = e; await new Promise(r => setTimeout(r, 1500)); }
     }
     throw ultima || new Error('Não foi possível imprimir');
@@ -393,10 +420,11 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
       try { const token = store.getToken(); if (token) await pegarPrefs(cfg.base, token, true); } catch (e) {}
       // O teste sempre mostra as duas vias, para a loja conferir o papel inteiro.
       const escolha = 'ambas';
-      const html = render.montarDocumento(render.PEDIDO_EXEMPLO, prefs || {}, prefs || {}, escolha);
+      const papel = prefsDoPapel();
+      const html = render.montarDocumento(render.PEDIDO_EXEMPLO, papel.p, papel.p, escolha);
       onLog('info', 'Imprimindo cupom de teste...', { tipo: 'teste', impressora: cfg.impressora });
-      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-      onLog('ok', 'Cupom de teste enviado. Confira se saiu certo na bobina.', { tipo: 'teste', impressora: cfg.impressora });
+      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, papel.largura, papel.margemImpressora);
+      onLog('ok', 'Cupom de teste enviado. Confira se saiu certo na bobina.', { tipo: 'teste', impressora: cfg.impressora, dados: papel.dados });
       return { ok: true };
     } catch (e) {
       onLog('erro', 'Falha no teste: ' + (e.message || e), { tipo: 'teste', nivel: 'erro', dados: { erro: e.message || String(e) } });
@@ -415,12 +443,14 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     if (!d || !d.pedido) return { ok: false, erro: 'pedido nao encontrado' };
     const det = { pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] };
     const numero = d.pedido.numero || id;
+    await prefsFrescas(cfg.base, token);
     const escolha = escolhaVias();
-    const html = render.montarDocumento(det, prefs || {}, prefs || {}, escolha);
+    const papel = prefsDoPapel();
+    const html = render.montarDocumento(det, papel.p, papel.p, escolha);
     if (!html) return { ok: false, erro: 'pedido sem vias para imprimir', numero };
     onLog('info', 'Reimprimindo o pedido #' + numero + ' (pedido do suporte)...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
-    await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, render.normalizarCfg(prefs || {}).largura);
-    onLog('ok', 'Pedido #' + numero + ' reimpresso (segunda via do suporte).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+    await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, papel.largura, papel.margemImpressora);
+    onLog('ok', 'Pedido #' + numero + ' reimpresso (segunda via do suporte).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora, dados: papel.dados });
     return { ok: true, numero: numero };
   }
 

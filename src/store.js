@@ -109,7 +109,8 @@ if (_cfg.vias !== 'auto') { _cfg.vias = 'auto'; salvarJson(ARQ_CFG, _cfg); }
 
 // Controle remoto (vem na resposta do print_log). So em memoria de proposito: ao
 // reiniciar, volta ao normal ate o servidor confirmar de novo o bloqueio/pausa.
-let _controle = { bloqueado: false, pausar: false, versao_recomendada: '', alertas: null };
+let _controle = { bloqueado: false, pausar: false, versao_recomendada: '', alertas: null,
+  margem_impressora: false, loja_aberta: null, manter_acordado: null };
 function setControle(c) {
   if (!c || typeof c !== 'object') return;
   _controle = {
@@ -118,6 +119,12 @@ function setControle(c) {
     versao_recomendada: String(c.versao_recomendada || ''),
     // 1.1.0: avisos de pedido novo escolhidos pela loja (null = servidor antigo)
     alertas: (c.alertas && typeof c.alertas === 'object') ? c.alertas : null,
+    // 1.2.0: caixa "Usar a mesma margem do botao Imprimir" deste computador
+    margem_impressora: !!c.margem_impressora,
+    // 1.2.0: nao deixar o computador entrar em descanso com a loja aberta
+    // (null = servidor sem a 1.2.0 liberada para a loja: nao mexe no descanso)
+    loja_aberta: typeof c.loja_aberta === 'boolean' ? c.loja_aberta : null,
+    manter_acordado: typeof c.manter_acordado === 'boolean' ? c.manter_acordado : null,
   };
 }
 function getControle() { return { ..._controle }; }

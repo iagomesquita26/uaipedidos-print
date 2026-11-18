@@ -19,7 +19,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, shell, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, ipcMain, Notification, nativeImage, shell, screen, powerSaveBlocker } = require('electron');
 
 let tray = null;
 let win = null;
@@ -253,6 +253,7 @@ function fazerLogout(motivo) {
   store.setConfig({ email: '' });
   store.setSenha('');
   if (poller) poller.desligar(); // tambem cala o alarme
+  manterAcordado(false, 'desconectado da loja');
   enviarStatus(poller ? poller.status() : null);
 }
 
@@ -358,8 +359,51 @@ function avisarNovaVersao(versaoNova) {
   } catch (e) {}
 }
 
+// ---- 1.2.0: computador sem descanso com a loja aberta ----
+// O servidor diz se a loja esta aberta e se a loja quer o computador acordado
+// (aba Impressao). Com os dois, o programa impede o computador de entrar em
+// descanso (a tela pode apagar). Sem noticia do servidor ha 15 min (sem internet,
+// desconectado), solta: nao segura o computador acordado para sempre.
+const DESCANSO_SEM_NOTICIA_MS = 15 * 60 * 1000;
+let descansoId = null;
+let descansoNoticiaTs = 0;
+let descansoTimer = null;
+function manterAcordado(ligar, motivo) {
+  try {
+    const ativo = descansoId !== null && powerSaveBlocker.isStarted(descansoId);
+    if (ligar && !ativo) {
+      descansoId = powerSaveBlocker.start('prevent-app-suspension');
+      registrarLog('info', 'Loja aberta: o computador não vai entrar em descanso.', { tipo: 'config' });
+    } else if (!ligar && ativo) {
+      powerSaveBlocker.stop(descansoId);
+      descansoId = null;
+      registrarLog('info', 'O computador pode entrar em descanso de novo (' + motivo + ').', { tipo: 'config' });
+    } else if (!ligar) {
+      descansoId = null;
+    }
+  } catch (e) {}
+}
+function atualizarDescanso(ctrl) {
+  // Servidor sem a 1.2.0 liberada para a loja: campos ausentes, nao mexe em nada.
+  if (!ctrl || typeof ctrl.loja_aberta !== 'boolean' || typeof ctrl.manter_acordado !== 'boolean') {
+    manterAcordado(false, 'opção indisponível');
+    return;
+  }
+  descansoNoticiaTs = Date.now();
+  if (ctrl.bloqueado) return manterAcordado(false, 'computador bloqueado');
+  if (!ctrl.manter_acordado) return manterAcordado(false, 'opção desligada na aba Impressão');
+  if (!ctrl.loja_aberta) return manterAcordado(false, 'loja fechada');
+  manterAcordado(true);
+  if (!descansoTimer) {
+    descansoTimer = setInterval(() => {
+      if (descansoId !== null && Date.now() - descansoNoticiaTs > DESCANSO_SEM_NOTICIA_MS) manterAcordado(false, 'sem notícia do servidor');
+    }, 60 * 1000);
+  }
+}
+
 // Chamado quando a telemetria traz o bloco de controle do servidor.
 function aoReceberControle(ctrl) {
+  try { atualizarDescanso(ctrl); } catch (e) {}
   // Reflete imediatamente no ícone/janela (bloqueio, pausa remota, aviso de versao).
   try { enviarStatus(poller ? poller.status() : null); } catch (e) {}
   // Aviso de versao nova: so uma vez por versao recomendada.
