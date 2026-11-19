@@ -13,7 +13,7 @@
 window.criarNucleoImpressao = function (core) {
   const {
     reactive, api, avisar, estab, autoCfg, pedDet, esperarVozComecar,
-    moeda, pagLabel, pagStLabel, fmtDataFull, estabIdAtual,
+    moeda, pagLabel, pagStLabel, fmtDataFull, estabIdAtual, printStatus,
   } = core;
 
     const IMP_FONTES = {
@@ -445,6 +445,7 @@ window.criarNucleoImpressao = function (core) {
       const vias = via === 'cozinha' ? [viaCozinha(d)] : via === 'motoboy' ? [viaMotoboy(d)] : [viaCozinha(d), viaMotoboy(d)];
       const ok = abrirImpressaoVias(vias);
       registrarImpressao(d, 'manual', via, ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
+      lembrarVerificar();
     }
     function imprimirCozinha() { return imprimirManual('cozinha'); }
     function imprimirMotoboy() { return imprimirManual('motoboy'); }
@@ -457,6 +458,18 @@ window.criarNucleoImpressao = function (core) {
        Tudo com prazo curto: sem resposta, imprime pelo navegador como sempre, ainda
        dentro do tempo em que o navegador deixa abrir a janela pelo clique. */
     const PROG_PORTAS = [47801, 47802, 47803];
+    // Saiu pelo navegador com o programa da loja ligado, mas este navegador nunca
+    // achou o programa: lembra uma vez só (por navegador) de verificar na aba Impressão.
+    function lembrarVerificar() {
+      try {
+        const s = printStatus && printStatus.value;
+        if (!s || !s.v120 || !s.online || progConhecido()) return;
+        if (/Android|iPhone|iPad|Mobile/i.test(navigator.userAgent || '')) return;
+        if (window.localStorage.getItem('uai_print_lembrete')) return;
+        window.localStorage.setItem('uai_print_lembrete', '1');
+        setTimeout(() => avisar('Se este é o computador da impressora, abra a aba Impressão e clique em "Verificar este computador". Assim o cupom sai igual ao automático.', 'info'), 1500);
+      } catch (e) {}
+    }
     let progPorta = 0, progVisto = 0;
     function progConhecido() {
       try { return typeof window !== 'undefined' && typeof fetch === 'function' && !!window.localStorage.getItem('uai_print_pc'); }
