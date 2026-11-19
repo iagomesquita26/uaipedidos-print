@@ -125,13 +125,19 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
   }
 
   // Busca (com cache) as preferências e os dados da loja.
-  async function pegarPrefs(base, token, forcar) {
+  async function pegarPrefs(base, token, forcar, timeoutMs) {
     if (!forcar && prefs && (Date.now() - prefsTs) < CACHE_PREFS_MS) return prefs;
+    const g = geracao;
     try { render.definirBase(base); } catch (e) {}
     try {
-      const j = await api.me(base, token);
+      const j = await api.me(base, token, timeoutMs);
       // o endpoint pode devolver a loja direto ou dentro de uma chave
-      prefs = j && (j.estabelecimento || j.loja || j) || {};
+      const novo = j && (j.estabelecimento || j.loja || j);
+      // Logout ou troca de loja durante a busca: descarta a resposta da loja antiga.
+      if (g !== geracao) return prefs || {};
+      // Resposta sem cara de loja (ex.: pagina de erro): fica com o ultimo ajuste conhecido.
+      if (!novo || typeof novo !== 'object' || (novo.id == null && novo.imp_largura == null)) throw new Error('resposta invalida');
+      prefs = novo;
       prefsTs = Date.now();
       try { store.setViasLoja(prefs.impressao_vias); } catch (e) {}
     } catch (e) {
@@ -143,9 +149,18 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
 
   // 1.2.0: as margens valem na hora de imprimir. Busca as preferencias de novo se
   // ja tem mais de alguns segundos (falhou: segue com o ultimo ajuste conhecido).
+  // So nas lojas com a 1.2.0 liberada (o servidor manda loja_aberta); nas outras
+  // segue o cache de sempre. Espera no maximo 5s e, se falhar, nao tenta de novo
+  // por 1 min: internet lenta nao pode segurar a fila de pedidos.
+  let prefsFalhaTs = 0;
   async function prefsFrescas(base, token) {
+    const v120 = store.getControle().loja_aberta !== null;
     const velhas = !prefs || (Date.now() - prefsTs) > PREFS_FRESCAS_MS;
-    try { await pegarPrefs(base, token, velhas); } catch (e) {}
+    if (prefs && (Date.now() - prefsFalhaTs) < 60 * 1000) return prefs; // falhou ha pouco: usa o ultimo ajuste
+    const forcar = v120 && velhas;
+    const antes = prefsTs;
+    try { await pegarPrefs(base, token, forcar, 5000); } catch (e) {}
+    if (prefsTs === antes && (Date.now() - prefsTs) >= CACHE_PREFS_MS) prefsFalhaTs = Date.now();
     return prefs || {};
   }
   // Preferencias como vao para o papel deste computador. Margem lateral negativa
@@ -202,13 +217,14 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     try {
       const cfg = store.getConfig();
       const token = await garantirToken();
+      // Margens da hora (1.2.0) antes de assumir o pedido: se demorar, o pedido ainda e de ninguem.
+      await prefsFrescas(cfg.base, token);
       // Trava no servidor: só imprime quem vence a corrida.
       const r = await api.marcarImpresso(cfg.base, token, id);
       if (!r || !r.imprimir) {
         onLog('info', 'Pedido #' + numero + ' já foi impresso em outro ponto, ignorando.');
         store.marcarProcessado(id);
       } else {
-        await prefsFrescas(cfg.base, token);
         const escolha = escolhaVias();
         const papel = prefsDoPapel();
         const html = render.montarDocumento(det, papel.p, papel.p, escolha);

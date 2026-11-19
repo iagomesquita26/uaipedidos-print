@@ -389,6 +389,8 @@ function atualizarDescanso(ctrl) {
     manterAcordado(false, 'opção indisponível');
     return;
   }
+  // Resposta que chegou depois do logout: nao segura o computador acordado.
+  if (!store.getToken()) return manterAcordado(false, 'desconectado da loja');
   descansoNoticiaTs = Date.now();
   if (ctrl.bloqueado) return manterAcordado(false, 'computador bloqueado');
   if (!ctrl.manter_acordado) return manterAcordado(false, 'opção desligada na aba Impressão');

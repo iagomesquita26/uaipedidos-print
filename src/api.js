@@ -15,7 +15,7 @@ function baseLimpa(base) {
   return String(base || 'https://uaipedidos.com.br').trim().replace(/\/+$/, '');
 }
 
-async function req(base, caminho, { method = 'GET', token = null, body = null } = {}) {
+async function req(base, caminho, { method = 'GET', token = null, body = null, timeoutMs = 20000 } = {}) {
   const url = baseLimpa(base) + caminho;
   const headers = { 'Accept': 'application/json' };
   if (token) headers['Authorization'] = 'Bearer ' + token;
@@ -27,7 +27,7 @@ async function req(base, caminho, { method = 'GET', token = null, body = null } 
       headers,
       body: body ? JSON.stringify(body) : undefined,
       // timeout defensivo: rede lenta não pode travar o programa
-      signal: AbortSignal.timeout ? AbortSignal.timeout(20000) : undefined,
+      signal: AbortSignal.timeout ? AbortSignal.timeout(timeoutMs) : undefined,
     });
   } catch (e) {
     throw new ApiError('Sem conexão com o UaiPedidos (' + (e.message || 'rede') + ')', 0);
@@ -51,8 +51,8 @@ async function login(base, email, senha) {
 }
 
 // GET /api/estab/me -> dados da loja + preferências de impressão
-function me(base, token) {
-  return req(base, '/api/estab/me', { token });
+function me(base, token, timeoutMs) {
+  return req(base, '/api/estab/me', { token, timeoutMs: timeoutMs || 20000 });
 }
 
 // GET /api/estab/pedidos?ping=1 -> { max_id, total }

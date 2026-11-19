@@ -82,7 +82,12 @@ function imprimirHtml(html, opcoes = {}) {
   const log = (typeof onLog === 'function') ? onLog : function () {};
   // Largura do rolo em px de tela (96 dpi), para a janela oculta montar o cupom
   // na mesma largura em que ele sera impresso e a medida de altura bater.
-  const larguraPx = Math.round((Number(larguraMm) || 80) * 96 / 25.4);
+  // Com a margem da impressora o cupom cabe numa faixa mais estreita (a area que a
+  // impressora alcanca, cerca de 8 mm a menos no 80 mm e 10 mm no 58 mm): mede
+  // nessa largura, para as linhas quebrarem como vao quebrar no papel.
+  const larguraBaseMm = Number(larguraMm) || 80;
+  const encolheMm = margemImpressora ? (larguraBaseMm >= 70 ? 8 : 10) : 0;
+  const larguraPx = Math.round((larguraBaseMm - encolheMm) * 96 / 25.4);
   return new Promise((resolve, reject) => {
     const win = novaJanelaOculta(larguraPx);
     let terminou = false;
@@ -185,7 +190,8 @@ function imprimirHtml(html, opcoes = {}) {
         } catch (e) {}
         const MICRON_POR_MM = 1000;
         const larguraFinalMm = Number(larguraMm) || 80;
-        const alturaFinalMm = Math.max(40, (Number(alturaMm) || 200) + 4); // folga de 4mm
+        // folga de 4mm; com a margem da impressora, 12mm (o topo e o pe que ela nao alcanca)
+        const alturaFinalMm = Math.max(40, (Number(alturaMm) || 200) + (margemImpressora ? 12 : 4));
         const cfgPrint = {
           silent: true,
           printBackground: true,

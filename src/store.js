@@ -109,8 +109,13 @@ if (_cfg.vias !== 'auto') { _cfg.vias = 'auto'; salvarJson(ARQ_CFG, _cfg); }
 
 // Controle remoto (vem na resposta do print_log). So em memoria de proposito: ao
 // reiniciar, volta ao normal ate o servidor confirmar de novo o bloqueio/pausa.
+// Excecao (1.2.0): a caixa da margem fica guardada no disco, por loja, para os
+// pedidos impressos logo ao abrir o programa (antes do primeiro sinal de vida)
+// sairem com a margem certa.
+const lojaChave = () => String(_cfg.base || '') + '|' + String(_cfg.email || '').toLowerCase();
+const margemGuardada = () => !!(_estado.margemImp && _estado.margemImp.loja === lojaChave() && _estado.margemImp.v);
 let _controle = { bloqueado: false, pausar: false, versao_recomendada: '', alertas: null,
-  margem_impressora: false, loja_aberta: null, manter_acordado: null };
+  margem_impressora: margemGuardada(), loja_aberta: null, manter_acordado: null };
 function setControle(c) {
   if (!c || typeof c !== 'object') return;
   _controle = {
@@ -126,6 +131,10 @@ function setControle(c) {
     loja_aberta: typeof c.loja_aberta === 'boolean' ? c.loja_aberta : null,
     manter_acordado: typeof c.manter_acordado === 'boolean' ? c.manter_acordado : null,
   };
+  if (_controle.margem_impressora !== margemGuardada()) {
+    _estado.margemImp = { loja: lojaChave(), v: _controle.margem_impressora };
+    salvarJson(ARQ_ESTADO, _estado);
+  }
 }
 function getControle() { return { ..._controle }; }
 
