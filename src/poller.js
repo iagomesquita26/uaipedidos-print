@@ -526,6 +526,54 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     }
   }
 
+  // 1.2.0: botao Imprimir do painel aberto neste PC. Imprime a via escolhida no
+  // painel, com as mesmas preferencias e a mesma margem da impressao automatica.
+  // Nao usa a trava do servidor (e uma via pedida pela pessoa). Responde na hora se
+  // aceitou; um pedido por vez, na ordem dos cliques. Recusa (o painel imprime pelo
+  // navegador) se o programa estiver pausado, desconectado ou em outra loja.
+  let cadeiaManual = Promise.resolve();
+  let manualNaFila = 0;
+  function imprimirManual({ pedido_id, via, estabelecimento_id } = {}) {
+    const ctrl = store.getControle();
+    if (store.getConfig().pausado || ctrl.pausar || ctrl.bloqueado) return { ok: false, status: 409, erro: 'programa pausado' };
+    if (!store.getToken()) return { ok: false, status: 409, erro: 'programa desconectado' };
+    const minha = (prefs && Number(prefs.id)) || 0;
+    if (!minha || Number(estabelecimento_id) !== minha) return { ok: false, status: 409, erro: 'programa em outra loja' };
+    const id = Number(pedido_id) || 0;
+    if (id <= 0) return { ok: false, status: 400, erro: 'pedido invalido' };
+    if (via !== 'cozinha' && via !== 'motoboy' && via !== 'ambas') return { ok: false, status: 400, erro: 'via invalida' };
+    if (manualNaFila >= 10) return { ok: false, status: 429, erro: 'muitos pedidos na fila' };
+    manualNaFila++;
+    const g = geracao;
+    cadeiaManual = cadeiaManual.then(() => imprimirManualJa(id, via, g)).catch(() => {}).then(() => { manualNaFila--; });
+    return { ok: true };
+  }
+  async function imprimirManualJa(id, via, g) {
+    const cfg = store.getConfig();
+    let numero = id, achou = false;
+    const extra = { origem: 'manual', via: via };
+    try {
+      if (g !== geracao) return;   // saiu da loja enquanto esperava
+      const token = await garantirToken();
+      const d = await api.detalhe(cfg.base, token, id);
+      if (!d || !d.pedido) throw new Error('pedido nao encontrado');
+      numero = d.pedido.numero || id; achou = true;
+      const det = { pedido: d.pedido, itens: d.itens || [], pagamentos: d.pagamentos || [] };
+      await prefsFrescas(cfg.base, token);
+      if (g !== geracao) return;
+      const papel = prefsDoPapel();
+      const html = render.montarDocumento(det, papel.p, papel.p, via);
+      if (!html) throw new Error('pedido sem vias para imprimir');
+      onLog('info', 'Imprimindo o pedido #' + numero + ' (botao Imprimir do painel)...', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora });
+      await imprimirComTentativas(html, cfg.impressora, cfg.copiasCozinha, papel.largura, papel.margemImpressora);
+      onLog('ok', 'Pedido #' + numero + ' enviado para a impressora (botao Imprimir do painel).', { tipo: 'impressao', pedido: numero, impressora: cfg.impressora, dados: Object.assign({}, papel.dados, extra) });
+    } catch (e) {
+      const erro = e.message || String(e);
+      if (e.status === 401) store.limparToken();
+      onLog('erro', 'Falha ao imprimir o pedido #' + numero + ' pelo botao Imprimir do painel: ' + erro, { tipo: 'impressao', nivel: 'erro', pedido: achou ? numero : undefined, dados: Object.assign({ erro: erro }, extra) });
+    }
+  }
+
   // Limpa a fila local a pedido do suporte, e deixa claro no diario de bordo.
   function limparFilaPublica() {
     limparFila();
@@ -533,7 +581,7 @@ function criarPoller({ onLog = () => {}, onStatus = () => {}, onAlertas = () => 
     emitirStatus();
   }
 
-  return { iniciar, parar, desligar, reiniciar, tick, imprimirTeste, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao,
+  return { iniciar, parar, desligar, reiniciar, tick, imprimirTeste, imprimirManual, reimprimir, reimprimirUltimos, limparFila: limparFilaPublica, status, prefsImpressao,
     estabId: () => (prefs && Number(prefs.id)) || 0, get conectado() { return conectado; } };
 }
 

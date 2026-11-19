@@ -496,6 +496,7 @@ app.whenReady().then(() => {
     sinalLocal = require('./local').iniciar({
       getInfo: () => ({ versao: app.getVersion(), agente_id: store.getAgenteId(), estabelecimento_id: poller.estabId() }),
       getBase: () => store.getConfig().base,
+      aoImprimir: (pedido) => poller.imprimirManual(pedido),   // 1.2.0: botao Imprimir do painel
       registrarLog,
     });
   } catch (e) {}

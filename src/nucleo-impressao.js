@@ -433,20 +433,80 @@ window.criarNucleoImpressao = function (core) {
 
     // Os botões do detalhe do pedido: monta a(s) via(s) e abre a janela de impressão.
     // "As duas" imprime cozinha e entrega juntas, num papel só (com corte no meio).
-    function imprimirCozinha() {
+    // Se o UaiPedidos Print (1.2.0) estiver aberto neste computador, o pedido vai
+    // para ele e sai igual à impressão automática. Senão, abre a janela do navegador.
+    async function imprimirManual(via) {
       const d = pedDet.value; if (!d || !d.pedido) return;
-      const ok = abrirImpressaoVias([viaCozinha(d)]);
-      registrarImpressao(d, 'manual', 'cozinha', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
+      if (await imprimirPeloPrograma(d, via)) {
+        avisar('Pedido #' + (d.pedido.numero || d.pedido.id) + ' enviado para o UaiPedidos Print.', 'info');
+        anotarImpressaoPrograma(d, via);
+        return;
+      }
+      const vias = via === 'cozinha' ? [viaCozinha(d)] : via === 'motoboy' ? [viaMotoboy(d)] : [viaCozinha(d), viaMotoboy(d)];
+      const ok = abrirImpressaoVias(vias);
+      registrarImpressao(d, 'manual', via, ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
     }
-    function imprimirMotoboy() {
-      const d = pedDet.value; if (!d || !d.pedido) return;
-      const ok = abrirImpressaoVias([viaMotoboy(d)]);
-      registrarImpressao(d, 'manual', 'motoboy', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
+    function imprimirCozinha() { return imprimirManual('cozinha'); }
+    function imprimirMotoboy() { return imprimirManual('motoboy'); }
+    function imprimirAmbas() { return imprimirManual('ambas'); }
+
+    /* 1.2.0: o botão Imprimir passa o pedido para o programa aberto NESTE PC, que
+       desconta a borda que a impressora não alcança (o navegador não desconta e o
+       cupom sai deslocado). Só tenta se este navegador já achou o programa antes
+       (aba Impressão), para não abrir a pergunta de permissão no meio do clique.
+       Tudo com prazo curto: sem resposta, imprime pelo navegador como sempre, ainda
+       dentro do tempo em que o navegador deixa abrir a janela pelo clique. */
+    const PROG_PORTAS = [47801, 47802, 47803];
+    let progPorta = 0, progVisto = 0;
+    function progConhecido() {
+      try { return typeof window !== 'undefined' && typeof fetch === 'function' && !!window.localStorage.getItem('uai_print_pc'); }
+      catch (e) { return false; }
     }
-    function imprimirAmbas() {
-      const d = pedDet.value; if (!d || !d.pedido) return;
-      const ok = abrirImpressaoVias([viaCozinha(d), viaMotoboy(d)]);
-      registrarImpressao(d, 'manual', 'ambas', ok, ok ? '' : 'Pop-up bloqueado pelo navegador');
+    async function progFetch(url, opcoes, prazo) {
+      const ctl = (typeof AbortController === 'function') ? new AbortController() : null;
+      const t = setTimeout(() => { if (ctl) ctl.abort(); }, prazo);
+      try { return await fetch(url, Object.assign({ cache:'no-store', signal: ctl ? ctl.signal : undefined }, opcoes || {})); }
+      finally { clearTimeout(t); }
+    }
+    async function progAchar() {
+      if (progPorta && Date.now() - progVisto < 60000) return progPorta;
+      const eid = Number(estabIdAtual()) || 0;
+      const achados = await Promise.all(PROG_PORTAS.map(async p => {
+        try {
+          const r = await progFetch('http://127.0.0.1:' + p + '/ping', null, 700);
+          if (!r.ok) return 0;
+          const j = await r.json();
+          return (j && j.app === 'uaipedidos-print' && j.imprime && Number(j.estabelecimento_id) === eid) ? p : 0;
+        } catch (e) { return 0; }
+      }));
+      progPorta = achados.find(Boolean) || 0;
+      progVisto = progPorta ? Date.now() : 0;
+      return progPorta;
+    }
+    async function imprimirPeloPrograma(d, via) {
+      if (!progConhecido()) return false;
+      try {
+        const porta = await progAchar();
+        if (!porta) return false;
+        const r = await progFetch('http://127.0.0.1:' + porta + '/imprimir', {
+          method:'POST', headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ pedido_id: Number(d.pedido.id), via, estabelecimento_id: Number(estabIdAtual()) || 0 }),
+        }, 2500);
+        if (!r.ok) { progPorta = 0; return false; }
+        return true;
+      } catch (e) { progPorta = 0; return false; }
+    }
+    // O programa grava o histórico pelo diário de bordo (chega em segundos); aqui só
+    // mostra na hora no detalhe aberto e no ícone do cartão.
+    function anotarImpressaoPrograma(d, via) {
+      try {
+        const id = Number(d.pedido.id);
+        const linha = { origem:'manual', via, meio:'programa', ok:1, erro:null, criado_em: agoraSql() };
+        const aberto = pedDet.value;
+        if (aberto && aberto.pedido && Number(aberto.pedido.id) === id) aberto.impressoes = (aberto.impressoes || []).concat([linha]);
+        const p = listaPedidos && (listaPedidos.value || []).find(x => Number(x.id) === id);
+        if (p) { p.impresso = 1; p.impressao_ultima_ok = 1; }
+      } catch (e) {}
     }
 
     /* Anota no historico do pedido que ele foi mandado para a impressora (ou que
